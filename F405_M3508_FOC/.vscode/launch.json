@@ -1,0 +1,50 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "type": "stlinkgdbtarget",
+            "request": "launch",
+            "name": "STM32Cube: Launch ST-Link GDB Server",
+            "origin": "snippet",
+            "cwd": "${workspaceFolder}",
+            "preBuild": "${command:st-stm32-ide-debug-launch.build}",
+            "runEntry": "main",
+            "imagesAndSymbols": [
+                {
+                    "imageFileName": "${command:st-stm32-ide-debug-launch.get-projects-binary-from-context1}"
+                }
+            ]
+        },
+        
+        {
+            "name": "Cortex Debug (DAPLink)",
+            "type": "cortex-debug",
+            "request": "launch",
+            "cwd": "${workspaceFolder}",
+            "executable": "${workspaceFolder}/build/Debug/F405_M3508_FOC.elf",
+            "servertype": "openocd",
+            "device": "STM32F405RG",
+            "svdFile": "C:\\ST\\STM32CubeCLT_1.19.0\\STMicroelectronics_CMSIS_SVD\\STM32F405.svd",
+            "configFiles": [
+                "interface/cmsis-dap.cfg",
+                "target/stm32f4x.cfg"
+            ],
+            "searchDir": [
+                "C:\\msys64\\mingw64\\share\\openocd\\scripts"
+            ],
+            "openOCDPreConfigLaunchCommands": [
+                "adapter speed 1000"
+            ],
+            "preLaunchTask": "Build (Debug)",
+            "postLaunchCommands": [
+                "monitor reset init"
+            ],
+            "showDevDebugOutput": false,
+            "runToEntryPoint": "main",
+            "liveWatch": {
+                "enabled": true,
+                "samplesPerSecond": 4
+            }
+        }
+    ]
+}
