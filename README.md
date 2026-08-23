@@ -2,6 +2,8 @@
 
 基于**磁场定向控制（FOC）**的无刷直流/永磁同步电机驱动项目，目标电机为**大疆 DJI M3508**（7 极对数，24 V 母线），以磁编码器为位置传感器，配套 MATLAB/Simulink 仿真验证。
 
+> 项目面向实验和二次开发。上电前请确认母线电压、电流采样零点、编码器方向和功率级保护均已验证；固件参数不应直接用于未经测试的硬件。
+
 ## 目录结构
 
 ```
@@ -15,12 +17,12 @@ Sensor_FOC/
 
 ### F405_M3508_FOC — STM32F405 方案
 
-- MCU：STM32F405 @ 168 MHz，CMake + STM32CubeMX 工程，集成 FreeRTOS 与 USB CDC 虚拟串口
+- MCU：STM32F405 @ 168 MHz，CMake + STM32CubeMX 工程，集成 FreeRTOS、USB CDC 和 CAN1（1 Mbps）
 - **10 kHz 中心对齐 PWM**（TIM1，ARR=8400）
 - 三路 ADC 注入转换（TIM1_CC4 触发），同步采样相电压 VA/VB/VC、相电流 IA/IB/IC、母线电压、磁编码器 SIN/COS 及温度
 - 开环 **V/F 起转**（`VF.c`，100 RPM），**SVPWM 零序注入法**输出（`SVPWM.c`）
 - 磁编码器 SIN/COS 通道 ADC 采样 + `atan2` 解算，与合成角 `vf_theta` 对比输出误差
-- 门极驱动使能与 FAULT 检测，LED 心跳/故障诊断
+- 速度/位置/电流三种目标模式，电压欠压、过压、编码器和温度故障保护，LED 心跳/故障诊断
 
 ### G431_M3508FOC — STM32G431 方案（当前主力）
 
@@ -58,6 +60,18 @@ Sensor_FOC/
 | SMO + PLL | 无传感器反电动势观测（仿真可用，固件待负载验证） |
 | 磁编码器校准 | sin/cos 中心与幅值在线标定、椭圆/幅值补偿、相位对齐 |
 
+## F405 CAN 协议
+
+F405 固件接收标准帧 `0x91`（DLC=8），数据格式为 `mode, value_hi, value_lo, 0, 0, 0, 0, 0`。`value` 为有符号大端 `int16`：
+
+| `mode` | 控制目标 | 原始值换算 |
+|--------|----------|------------|
+| `0x01` | `iq` 电流 | `value / 1000` A |
+| `0x02` | 速度 | `value` rpm |
+| `0x03` | 单圈机械位置 | `value * pi / 30000` rad |
+
+每 10 ms 发送标准反馈帧 `0x78`：`iq_mA_hi, iq_mA_lo, speed_hi, speed_lo, position_hi, position_lo, temperature, error`。错误码 `0x01/0x02/0x03/0x04` 分别表示欠压、过压、编码器无效和过温。F405 目录下的 [`CAN_Control_Commands.xlsx`](F405_M3508_FOC/CAN_Control_Commands.xlsx) 提供可直接复制的示例帧。
+
 ## 硬件参数
 
 - 电机：DJI M3508（7 极对数）
@@ -66,21 +80,35 @@ Sensor_FOC/
 
 ## 构建方法
 
+### 环境要求
+
+- CMake 3.20+、Ninja 和 `arm-none-eabi-gcc` 工具链
+- STM32CubeMX（仅在修改 `.ioc` 后重新生成代码时需要）
+- G431 方案也可使用 Keil MDK-ARM；仿真需要 MATLAB/Simulink
+
 ### F405_M3508_FOC（CMake）
 
 ```bash
-cmake -S F405_M3508_FOC -B F405_M3508_FOC/build -G Ninja --preset debug
-cmake --build F405_M3508_FOC/build
+cd F405_M3508_FOC
+cmake --preset Debug
+cmake --build --preset Debug
 ```
 
 ### G431_M3508FOC（CMake 或 Keil）
 
 ```bash
-cmake -S G431_M3508FOC -B G431_M3508FOC/build -G Ninja --preset debug
-cmake --build G431_M3508FOC/build
+cd G431_M3508FOC
+cmake --preset Debug
+cmake --build --preset Debug
 ```
 
 或直接打开 `G431_M3508FOC/MDK-ARM/FOC.uvprojx`（Keil MDK-ARM）编译。
+
+生成文件默认位于对应工程的 `build/Debug` 或 `build/Release` 目录。修改工程配置后，建议先删除该工程的构建目录再重新配置。
+
+### 仿真
+
+在 MATLAB/Simulink 中打开 `FOC_Simulation/FOC.slx`。运行前请确认已安装 Simulink 及对应版本的 Simscape Electrical（或 Specialized Power Systems）。`FOC_Simulation/slprj` 为 Simulink 生成的缓存目录，不需要手工修改。
 
 ## 当前状态与待办
 
@@ -88,5 +116,16 @@ cmake --build G431_M3508FOC/build
 - [x] 磁编码器在线校准与角度融合
 - [x] 电流闭环（10 kHz iq/id 双 PI）
 - [x] 速度环 + 电流环双闭环级联
+- [x] F405 CAN 目标指令、状态反馈和基础故障码
 - [ ] 消除 iq/id 残余交流分量（编码器幅值/椭圆补偿）
 - [ ] SMO 观测器在带载条件下重新启用验证
+
+## 调试工具
+
+- G431：USART2 以 1 kHz 输出 VOFA+ 数据，UART4 DMA 接收编码器数据
+- F405：USB CDC 输出诊断信息，CAN 用于目标值下发和状态反馈
+- `filter_dump.txt`、`Video/` 和工程内 PNG 文件是实验记录或分析中间产物，具体用途以文件名和源码为准
+
+## 许可
+
+仓库当前未声明开源许可证。如需在其他项目中分发或商用，请先获得作者授权。
