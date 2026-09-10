@@ -326,7 +326,7 @@ static int8_t CDC_TransmitCplt_FS(uint8_t *Buf, uint32_t *Len, uint8_t epnum)
   */
 int CDC_Printf(const char *format, ...)
 {
-  char buf[256];
+  char buf[512];
   va_list args;
   int len;
 

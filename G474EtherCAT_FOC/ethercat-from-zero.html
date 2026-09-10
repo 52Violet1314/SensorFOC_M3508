@@ -1,0 +1,1217 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>EtherCAT 从零到 STM32G474 + LAN9252</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f5f7f8;
+      --paper: #ffffff;
+      --ink: #172026;
+      --muted: #5b6870;
+      --line: #d9e0e3;
+      --soft: #eef2f3;
+      --red: #c63f36;
+      --red-soft: #f9e8e6;
+      --teal: #187c78;
+      --teal-soft: #e2f1ef;
+      --blue: #2d67a3;
+      --blue-soft: #e6eef8;
+      --amber: #93640c;
+      --amber-soft: #f8efd9;
+      --green: #39733e;
+      --green-soft: #e6f2e7;
+      --nav-width: 278px;
+      --radius: 7px;
+    }
+
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; scroll-padding-top: 24px; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      background: var(--bg);
+      font-family: "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+      font-size: 16px;
+      line-height: 1.75;
+      letter-spacing: 0;
+    }
+    button, input { font: inherit; letter-spacing: 0; }
+    button { cursor: pointer; }
+    code, pre { font-family: Consolas, "Cascadia Code", monospace; }
+    code { color: #8b302b; background: #f4eeee; padding: 1px 5px; border-radius: 3px; }
+    pre {
+      margin: 14px 0;
+      padding: 15px 17px;
+      overflow: auto;
+      color: #e9f0f2;
+      background: #202b31;
+      border-radius: var(--radius);
+      line-height: 1.55;
+    }
+    pre code { color: inherit; background: none; padding: 0; }
+
+    .layout { display: grid; grid-template-columns: var(--nav-width) minmax(0, 1fr); min-height: 100vh; }
+    .sidebar {
+      position: sticky;
+      top: 0;
+      height: 100vh;
+      overflow-y: auto;
+      padding: 24px 18px;
+      background: #182329;
+      color: #f4f7f8;
+      border-right: 1px solid #26343b;
+    }
+    .brand { padding: 0 8px 18px; border-bottom: 1px solid #344249; }
+    .brand strong { display: block; font-size: 19px; font-weight: 500; }
+    .brand span { display: block; margin-top: 4px; color: #aebbc1; font-size: 13px; line-height: 1.5; }
+    .progress-label { display: flex; justify-content: space-between; margin: 16px 8px 6px; color: #b8c4c9; font-size: 12px; }
+    .progress-track { height: 4px; margin: 0 8px 18px; background: #35434a; }
+    .progress-bar { width: 0; height: 100%; background: #e2675f; transition: width .15s linear; }
+    nav a {
+      display: block;
+      padding: 7px 9px;
+      color: #c7d1d5;
+      text-decoration: none;
+      border-left: 2px solid transparent;
+      font-size: 14px;
+      line-height: 1.35;
+    }
+    nav a:hover, nav a.active { color: #fff; background: #223138; border-left-color: #e2675f; }
+
+    main { min-width: 0; }
+    .hero {
+      padding: 58px clamp(22px, 6vw, 84px) 48px;
+      color: white;
+      background: #263b44;
+      border-bottom: 5px solid var(--red);
+    }
+    .hero-inner { max-width: 1050px; margin: 0 auto; }
+    .hero-kicker { margin: 0 0 12px; color: #ffb0aa; font-weight: 500; }
+    h1 { margin: 0; max-width: 850px; font-size: clamp(32px, 5vw, 56px); font-weight: 500; line-height: 1.15; }
+    .hero p { max-width: 780px; margin: 22px 0 0; color: #d9e3e6; font-size: 18px; }
+    .hero-path { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 30px; align-items: center; }
+    .hero-path span { padding: 5px 9px; background: #344d58; border: 1px solid #49636e; border-radius: 4px; font-size: 13px; }
+    .hero-path b { color: #f19b95; font-weight: 500; }
+
+    .content { max-width: 1100px; margin: 0 auto; padding: 34px clamp(18px, 5vw, 64px) 100px; }
+    section { padding: 36px 0 38px; border-bottom: 1px solid var(--line); }
+    section:last-child { border-bottom: 0; }
+    .chapter { color: var(--red); font-size: 13px; font-weight: 500; text-transform: uppercase; }
+    h2 { margin: 5px 0 13px; font-size: clamp(26px, 3vw, 36px); line-height: 1.25; font-weight: 500; }
+    h3 { margin: 27px 0 10px; font-size: 20px; line-height: 1.35; font-weight: 500; }
+    h4 { margin: 18px 0 7px; font-size: 16px; font-weight: 500; }
+    p { margin: 10px 0; }
+    .lead { color: #37454c; font-size: 18px; max-width: 900px; }
+    .muted { color: var(--muted); }
+
+    .callout {
+      margin: 18px 0;
+      padding: 14px 17px;
+      border-left: 4px solid var(--blue);
+      background: var(--blue-soft);
+    }
+    .callout strong { font-weight: 500; }
+    .callout.warn { border-left-color: var(--amber); background: var(--amber-soft); }
+    .callout.key { border-left-color: var(--red); background: var(--red-soft); }
+    .callout.good { border-left-color: var(--green); background: var(--green-soft); }
+
+    .concept-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin: 19px 0; }
+    .concept {
+      padding: 16px;
+      background: var(--paper);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+    }
+    .concept .num { color: var(--red); font-weight: 500; }
+    .concept strong { display: block; margin: 3px 0 4px; font-weight: 500; }
+    .concept p { margin: 0; color: var(--muted); font-size: 14px; }
+
+    .diagram {
+      margin: 20px 0;
+      padding: 20px;
+      background: var(--paper);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      overflow: hidden;
+    }
+    .diagram-title { margin-bottom: 14px; font-weight: 500; }
+    .flow { display: flex; align-items: stretch; gap: 8px; }
+    .flow-node {
+      flex: 1;
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      padding: 14px 10px;
+      text-align: center;
+      background: var(--soft);
+      border-top: 3px solid #7f9199;
+      border-radius: 4px;
+    }
+    .flow-node strong { font-weight: 500; }
+    .flow-node small { color: var(--muted); line-height: 1.4; }
+    .flow-node.host { background: var(--blue-soft); border-color: var(--blue); }
+    .flow-node.esc { background: var(--red-soft); border-color: var(--red); }
+    .flow-node.mcu { background: var(--teal-soft); border-color: var(--teal); }
+    .flow-node.motor { background: var(--amber-soft); border-color: var(--amber); }
+    .arrow { align-self: center; color: #7a8990; font-size: 23px; line-height: 1; }
+    .wire-labels { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 8px; color: var(--muted); text-align: center; font-size: 12px; }
+
+    .layer-stack { display: grid; gap: 5px; margin: 18px 0; }
+    .layer {
+      display: grid;
+      grid-template-columns: 130px 180px minmax(0, 1fr);
+      align-items: center;
+      gap: 14px;
+      padding: 11px 14px;
+      border-left: 4px solid var(--teal);
+      background: var(--paper);
+    }
+    .layer:nth-child(2n) { border-left-color: var(--blue); }
+    .layer strong { font-weight: 500; }
+    .layer span { color: var(--muted); font-size: 14px; }
+
+    .tabs { margin: 19px 0; }
+    .tab-list { display: flex; flex-wrap: wrap; gap: 4px; border-bottom: 1px solid var(--line); }
+    .tab-btn { padding: 8px 12px; border: 0; border-bottom: 3px solid transparent; background: transparent; color: var(--muted); }
+    .tab-btn[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--red); }
+    .tab-panel { display: none; padding: 17px 0 2px; }
+    .tab-panel.active { display: block; }
+
+    .frame { display: flex; min-width: 760px; margin: 13px 0; }
+    .frame-part {
+      flex: var(--grow);
+      min-width: 80px;
+      padding: 12px 8px;
+      border-right: 1px solid rgba(255,255,255,.5);
+      color: #172026;
+      text-align: center;
+      transition: transform .15s ease, filter .15s ease;
+    }
+    .frame-part:first-child { border-radius: 5px 0 0 5px; }
+    .frame-part:last-child { border-radius: 0 5px 5px 0; border-right: 0; }
+    .frame-part:hover, .frame-part:focus { transform: translateY(-3px); filter: brightness(.97); outline: 2px solid var(--ink); outline-offset: 1px; }
+    .frame-part strong { display: block; font-weight: 500; }
+    .frame-part small { display: block; line-height: 1.25; }
+    .c1 { background: #d6e6ef; } .c2 { background: #f2d5d1; } .c3 { background: #d7ebe7; }
+    .c4 { background: #f2e2bc; } .c5 { background: #e4dced; } .c6 { background: #dce4d3; }
+    .inspector { min-height: 82px; padding: 13px 15px; background: var(--soft); border-left: 3px solid var(--blue); }
+    .inspector strong { font-weight: 500; }
+
+    .table-wrap { overflow-x: auto; margin: 15px 0; }
+    table { width: 100%; border-collapse: collapse; background: var(--paper); }
+    th, td { padding: 10px 12px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+    th { color: #3a474d; background: var(--soft); font-weight: 500; white-space: nowrap; }
+    td:first-child { white-space: nowrap; }
+
+    .address-lab { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; align-items: start; }
+    .lab-controls { padding: 17px; background: var(--paper); border: 1px solid var(--line); border-radius: var(--radius); }
+    .control-group { margin-bottom: 14px; }
+    .control-group label { display: flex; justify-content: space-between; gap: 10px; margin-bottom: 5px; font-size: 14px; }
+    input[type="range"] { width: 100%; accent-color: var(--red); }
+    .logical-map { display: grid; grid-template-columns: repeat(8, 1fr); gap: 3px; }
+    .byte {
+      min-height: 48px;
+      display: grid;
+      place-items: center;
+      padding: 4px;
+      background: #e3e8ea;
+      border-bottom: 3px solid #91a0a7;
+      font-size: 12px;
+      text-align: center;
+    }
+    .byte.hit { color: #0e4f4c; background: var(--teal-soft); border-color: var(--teal); }
+    .byte small { display: block; color: var(--muted); }
+
+    .state-machine { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin: 18px 0; }
+    .state {
+      position: relative;
+      min-height: 105px;
+      padding: 14px 11px;
+      border: 1px solid var(--line);
+      border-top: 4px solid #84949b;
+      background: var(--paper);
+      text-align: center;
+    }
+    .state.active { background: var(--green-soft); border-color: var(--green); }
+    .state strong { display: block; font-weight: 500; }
+    .state small { display: block; margin-top: 5px; color: var(--muted); line-height: 1.4; }
+    .state:not(:last-child)::after { content: "→"; position: absolute; right: -14px; top: 35px; z-index: 2; color: var(--red); font-size: 20px; }
+    .state-controls { display: flex; flex-wrap: wrap; gap: 7px; }
+    .btn { padding: 8px 12px; border: 1px solid #aab6bb; border-radius: 4px; background: var(--paper); color: var(--ink); }
+    .btn:hover { background: var(--soft); }
+    .btn.primary { color: #fff; background: var(--red); border-color: var(--red); }
+
+    .pdo-cycle { display: grid; grid-template-columns: 1fr 72px 1fr; gap: 10px; align-items: center; }
+    .device-block { padding: 17px; background: var(--paper); border: 1px solid var(--line); border-radius: var(--radius); }
+    .device-block strong { font-weight: 500; }
+    .data-word { display: flex; justify-content: space-between; margin-top: 7px; padding: 7px 9px; background: var(--soft); font-size: 13px; }
+    .cycle-arrows { color: var(--red); text-align: center; font-size: 26px; line-height: 1.6; }
+    .cycle-bar { position: relative; height: 9px; margin: 19px 0 7px; overflow: hidden; background: #dbe2e5; }
+    .cycle-pulse { width: 12%; height: 100%; background: var(--red); animation: cycle 2.4s linear infinite; }
+    @keyframes cycle { from { transform: translateX(-100%); } to { transform: translateX(840%); } }
+    @media (prefers-reduced-motion: reduce) { .cycle-pulse { animation: none; width: 100%; opacity: .5; } html { scroll-behavior: auto; } }
+
+    .split { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+    .compare { padding: 16px; border-top: 4px solid var(--blue); background: var(--paper); }
+    .compare:nth-child(2) { border-top-color: var(--amber); }
+    .compare strong { font-weight: 500; }
+    .compare ul { margin-bottom: 0; padding-left: 20px; }
+
+    .timeline { margin: 17px 0; padding-left: 24px; border-left: 2px solid #b7c2c6; }
+    .time-step { position: relative; padding: 0 0 18px 18px; }
+    .time-step::before { content: ""; position: absolute; left: -31px; top: 7px; width: 12px; height: 12px; border-radius: 50%; background: var(--paper); border: 3px solid var(--red); }
+    .time-step strong { font-weight: 500; }
+    .time-step p { margin: 3px 0 0; color: var(--muted); }
+
+    .pin-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 7px; margin: 14px 0; }
+    .pin { padding: 10px; background: var(--paper); border-left: 3px solid var(--teal); }
+    .pin strong { display: block; font-weight: 500; }
+    .pin small { color: var(--muted); }
+
+    .checklist { list-style: none; padding: 0; }
+    .checklist li { position: relative; margin: 7px 0; padding: 9px 12px 9px 39px; background: var(--paper); border-bottom: 1px solid var(--line); }
+    .checklist li::before { content: "✓"; position: absolute; left: 13px; color: var(--green); font-weight: 500; }
+
+    .quiz { margin-top: 22px; }
+    .quiz-q { margin: 14px 0; padding: 15px; background: var(--paper); border: 1px solid var(--line); border-radius: var(--radius); }
+    .quiz-q p { margin-top: 0; font-weight: 500; }
+    .answers { display: grid; gap: 6px; }
+    .answer { padding: 8px 10px; text-align: left; border: 1px solid #bac4c8; background: var(--paper); border-radius: 4px; }
+    .answer.correct { border-color: var(--green); background: var(--green-soft); }
+    .answer.wrong { border-color: var(--red); background: var(--red-soft); }
+    .feedback { min-height: 26px; margin-top: 7px; color: var(--muted); font-size: 14px; }
+
+    .footer { padding: 25px; color: #c9d3d7; background: #182329; text-align: center; font-size: 13px; }
+    .mobile-nav { display: none; }
+
+    @media (max-width: 880px) {
+      .layout { display: block; }
+      .sidebar { display: none; }
+      .mobile-nav { display: block; position: sticky; top: 0; z-index: 10; padding: 9px 14px; color: white; background: #182329; }
+      .mobile-nav select { width: 100%; padding: 8px; color: #172026; background: #fff; border: 0; }
+      .concept-grid, .pin-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .address-lab { grid-template-columns: 1fr; }
+      .hero { padding-top: 42px; }
+    }
+    @media (max-width: 640px) {
+      body { font-size: 15px; }
+      .content { padding-left: 15px; padding-right: 15px; }
+      .concept-grid, .split, .pin-grid { grid-template-columns: 1fr; }
+      .flow { flex-direction: column; }
+      .arrow { transform: rotate(90deg); }
+      .wire-labels { display: none; }
+      .layer { grid-template-columns: 1fr; gap: 2px; }
+      .state-machine { grid-template-columns: 1fr; }
+      .state:not(:last-child)::after { content: "↓"; right: auto; left: 50%; top: auto; bottom: -19px; }
+      .pdo-cycle { grid-template-columns: 1fr; }
+      .cycle-arrows { transform: rotate(90deg); }
+      .logical-map { grid-template-columns: repeat(4, 1fr); }
+    }
+  </style>
+</head>
+<body>
+  <div class="layout">
+    <aside class="sidebar">
+      <div class="brand">
+        <strong>EtherCAT 从零讲透</strong>
+        <span>面向 STM32G474 + LAN9252 + KickCAT</span>
+      </div>
+      <div class="progress-label"><span>阅读进度</span><span id="progressText">0%</span></div>
+      <div class="progress-track"><div class="progress-bar" id="progressBar"></div></div>
+      <nav id="sideNav">
+        <a href="#s0">0. 先看全局</a>
+        <a href="#s1">1. EtherCAT 到底是什么</a>
+        <a href="#s2">2. 报文如何穿过从站</a>
+        <a href="#s3">3. 寻址方式</a>
+        <a href="#s4">4. ESC 内部结构</a>
+        <a href="#s5">5. 从站状态机</a>
+        <a href="#s6">6. PDO 与 SDO</a>
+        <a href="#s7">7. CoE 与对象字典</a>
+        <a href="#s8">8. CiA402 驱动控制</a>
+        <a href="#s9">9. DC 分布式时钟</a>
+        <a href="#s10">10. LAN9252 的 SPI PDI</a>
+        <a href="#s11">11. 本工程如何移植</a>
+        <a href="#s12">12. KickCAT 主站实操</a>
+        <a href="#s13">13. 故障定位方法</a>
+        <a href="#s14">14. 最小验证路线</a>
+        <a href="#s15">15. CAN → EtherCAT 迁移</a>
+        <a href="#s16">16. 自测题</a>
+      </nav>
+    </aside>
+
+    <main>
+      <div class="mobile-nav">
+        <select id="mobileSelect" aria-label="选择章节">
+          <option value="s0">0. 先看全局</option><option value="s1">1. EtherCAT 是什么</option>
+          <option value="s2">2. 报文穿过从站</option><option value="s3">3. 寻址方式</option>
+          <option value="s4">4. ESC 内部结构</option><option value="s5">5. 从站状态机</option>
+          <option value="s6">6. PDO 与 SDO</option><option value="s7">7. CoE 与对象字典</option>
+          <option value="s8">8. CiA402</option><option value="s9">9. DC</option>
+          <option value="s10">10. LAN9252 SPI</option><option value="s11">11. 工程移植</option>
+          <option value="s12">12. KickCAT</option><option value="s13">13. 故障定位</option>
+          <option value="s14">14. 验证路线</option><option value="s15">15. CAN → EtherCAT</option>
+          <option value="s16">16. 自测</option>
+        </select>
+      </div>
+
+      <header class="hero">
+        <div class="hero-inner">
+          <p class="hero-kicker">从一根网线，到 FOC 的目标电流</p>
+          <h1>EtherCAT：从帧、ESC 到伺服状态机</h1>
+          <p>这不是术语手册，而是一条完整的数据路径。读完后，你应该能说清：主站发了什么、LAN9252 做了什么、STM32 为什么能收到 PDO，以及代码应该落在哪里。</p>
+          <div class="hero-path" aria-label="学习路径">
+            <span>Ethernet 帧</span><b>→</b><span>EtherCAT Datagram</span><b>→</b><span>FMMU / SM</span><b>→</b><span>LAN9252 DPRAM</span><b>→</b><span>SPI</span><b>→</b><span>STM32 FOC</span>
+          </div>
+        </div>
+      </header>
+
+      <article class="content">
+        <section id="s0">
+          <span class="chapter">Chapter 0</span>
+          <h2>先建立一张完整地图</h2>
+          <p class="lead">EtherCAT 系统里只有一个主站。主站主动发送所有周期帧；各从站在帧经过自己时“顺手”读取属于自己的输出数据，并把输入数据写回同一个帧。</p>
+
+          <div class="diagram">
+            <div class="diagram-title">你这个项目中的真实数据链</div>
+            <div class="flow">
+              <div class="flow-node host"><strong>KickCAT 主站</strong><small>PC 网卡发出 EtherCAT 帧</small></div>
+              <div class="arrow">→</div>
+              <div class="flow-node esc"><strong>LAN9252</strong><small>ESC 实时处理帧与 DPRAM</small></div>
+              <div class="arrow">↔</div>
+              <div class="flow-node mcu"><strong>STM32G474</strong><small>SPI 读写 PDO，运行 SSC</small></div>
+              <div class="arrow">↔</div>
+              <div class="flow-node motor"><strong>FOC / 电机</strong><small>控制目标与反馈</small></div>
+            </div>
+            <div class="wire-labels"><span>100BASE-TX / 0x88A4</span><span>SPI PDI</span><span>内存变量 / ISR</span></div>
+          </div>
+
+          <div class="concept-grid">
+            <div class="concept"><span class="num">01</span><strong>主站 Master</strong><p>排周期、配置从站、发帧。KickCAT 或 TwinCAT 都是主站软件。</p></div>
+            <div class="concept"><span class="num">02</span><strong>ESC</strong><p>EtherCAT Slave Controller。LAN9252 是硬件 ESC，不只是 PHY。</p></div>
+            <div class="concept"><span class="num">03</span><strong>从站应用</strong><p>STM32 上的 SSC、对象字典、CiA402 和你的 FOC 业务逻辑。</p></div>
+          </div>
+
+          <div class="callout key"><strong>第一条核心认识：</strong>PC 不会通过网线直接读 STM32 内存。PC 操作的是 EtherCAT 逻辑地址；LAN9252 的 FMMU 把它映射到本地 DPRAM；STM32 再通过 SPI PDI 访问这块 DPRAM。</div>
+        </section>
+
+        <section id="s1">
+          <span class="chapter">Chapter 1</span>
+          <h2>EtherCAT 到底是什么</h2>
+          <p>EtherCAT 是建立在标准 IEEE 802.3 以太网物理层上的工业实时总线。它使用普通的 100BASE-TX 收发电气规范，但处理帧的方式与普通 TCP/IP 网络不同。</p>
+
+          <div class="layer-stack">
+            <div class="layer"><strong>应用语义</strong><b>CiA402 / 自定义对象</b><span>“使能电机”“目标速度 1000 rpm”“读取实际位置”</span></div>
+            <div class="layer"><strong>应用协议</strong><b>CoE / PDO / SDO</b><span>怎样组织周期数据、怎样访问对象字典</span></div>
+            <div class="layer"><strong>EtherCAT 核心</strong><b>Datagram / FMMU / SM</b><span>逻辑寻址、现场内存映射、缓冲区同步</span></div>
+            <div class="layer"><strong>以太网帧</strong><b>EtherType 0x88A4</b><span>EtherCAT Datagram 被装进 Ethernet Payload</span></div>
+            <div class="layer"><strong>物理层</strong><b>100BASE-TX</b><span>网线、磁性器件、PHY、电信号</span></div>
+          </div>
+
+          <h3>它为什么快</h3>
+          <p>传统现场总线常常是主站逐个询问：问 1 号、等回答；问 2 号、再等回答。EtherCAT 主站可以发出一帧，其中包含多个从站的数据。帧沿链路经过所有从站，每个 ESC 都在帧流经时处理自己的几个字节，这叫 <em>processing on the fly</em>。</p>
+          <div class="callout"><strong>注意：</strong>“on the fly”不代表数据神奇地不经过缓存，而是 ESC 有专用硬件流水线，在极小延迟下完成匹配、读写和 WKC 更新，无需 MCU 收完整帧再软件解析。</div>
+
+          <h3>它不是什么</h3>
+          <div class="split">
+            <div class="compare"><strong>不是 TCP/IP</strong><ul><li>没有 TCP 连接</li><li>不依赖 IP 地址</li><li>不走 Socket 应用协议</li><li>EtherType 是 <code>0x88A4</code></li></ul></div>
+            <div class="compare"><strong>也不是 CAN 总线</strong><ul><li>虽然 CoE 借用了 CANopen 的对象模型</li><li>线上的帧仍然是 EtherCAT Ethernet</li><li>CoE 是 CANopen over EtherCAT，不是物理 CAN</li></ul></div>
+          </div>
+        </section>
+
+        <section id="s2">
+          <span class="chapter">Chapter 2</span>
+          <h2>一帧报文如何穿过所有从站</h2>
+          <p class="lead">点击下面的字段查看含义。EtherCAT Ethernet Payload 中可以连续放多个 Datagram，每个 Datagram 可以执行一次读、写或读写操作。</p>
+
+          <div class="diagram">
+            <div class="diagram-title">Ethernet 帧结构</div>
+            <div style="overflow-x:auto">
+              <div class="frame" data-inspector="frameInfo">
+                <button class="frame-part c1" style="--grow:6" data-title="目的 MAC + 源 MAC" data-info="各 6 字节。EtherCAT 一般由主站网卡发出并沿链路传播，不依赖 IP。"><strong>MAC Header</strong><small>12 B</small></button>
+                <button class="frame-part c2" style="--grow:2" data-title="EtherType" data-info="值为 0x88A4，表示后续负载是 EtherCAT。抓包时这是最重要的过滤条件。"><strong>0x88A4</strong><small>2 B</small></button>
+                <button class="frame-part c3" style="--grow:4" data-title="EtherCAT Header" data-info="包含 EtherCAT 数据长度和类型。后面跟一个或多个 Datagram。"><strong>ECAT Header</strong><small>2 B</small></button>
+                <button class="frame-part c4" style="--grow:12" data-title="一个或多个 Datagram" data-info="每个 Datagram 都有命令、地址、长度、数据和 WKC。主站通常在一帧里安排多个事务。"><strong>Datagram(s)</strong><small>可变长度</small></button>
+                <button class="frame-part c5" style="--grow:4" data-title="FCS" data-info="标准 Ethernet 帧校验，由网卡/PHY 处理，通常不会交给应用程序。"><strong>FCS</strong><small>4 B</small></button>
+              </div>
+            </div>
+            <div class="inspector" id="frameInfo" aria-live="polite"><strong>点击一个字段</strong><br><span class="muted">这里会解释该字段在通信链中的作用。</span></div>
+          </div>
+
+          <div class="diagram">
+            <div class="diagram-title">Datagram 内部结构</div>
+            <div style="overflow-x:auto">
+              <div class="frame" data-inspector="datagramInfo">
+                <button class="frame-part c2" style="--grow:1" data-title="Cmd" data-info="1 字节操作码，例如 APRD、FPWR、LRW。决定按什么地址读还是写。"><strong>Cmd</strong><small>1 B</small></button>
+                <button class="frame-part c1" style="--grow:1" data-title="Index" data-info="1 字节序号，用于让主站把返回 Datagram 与发送事务对应起来。"><strong>Idx</strong><small>1 B</small></button>
+                <button class="frame-part c3" style="--grow:4" data-title="Address" data-info="4 字节地址。含义取决于 Cmd：可能是自动增量地址、固定站地址或 32 位逻辑地址。"><strong>Address</strong><small>4 B</small></button>
+                <button class="frame-part c4" style="--grow:2" data-title="Length / Flags" data-info="11 位长度加循环、More 等控制位，说明数据区长度以及后面是否还有 Datagram。"><strong>Len / Flags</strong><small>2 B</small></button>
+                <button class="frame-part c5" style="--grow:2" data-title="IRQ" data-info="EtherCAT Event Request，汇总从站事件信息供主站判断。"><strong>IRQ</strong><small>2 B</small></button>
+                <button class="frame-part c6" style="--grow:8" data-title="Data" data-info="真正被读写的内容。写命令由主站带来数据；读命令由命中的从站把内容写入这里。"><strong>Data</strong><small>N B</small></button>
+                <button class="frame-part c2" style="--grow:2" data-title="Working Counter" data-info="WKC 是成功处理该命令的计数。主站用 expected WKC 对比实际 WKC，迅速发现掉站、映射错误或状态异常。"><strong>WKC</strong><small>2 B</small></button>
+              </div>
+            </div>
+            <div class="inspector" id="datagramInfo" aria-live="polite"><strong>WKC 非常关键</strong><br><span class="muted">它不是 CRC，而是“有多少预期操作被从站成功执行”的证明。</span></div>
+          </div>
+
+          <h3>WKC 怎么理解</h3>
+          <p>假设一个 LRW Datagram 预期同时让 3 个从站读/写其映射区，主站会预先算出期望 WKC。实际返回值少了，说明至少有一个对应操作没有成功。WKC 能告诉你“过程数据链不完整”，但单靠它不能直接指出是哪一个物理原因。</p>
+        </section>
+
+        <section id="s3">
+          <span class="chapter">Chapter 3</span>
+          <h2>三类寻址：从发现设备到周期通信</h2>
+          <div class="tabs">
+            <div class="tab-list" role="tablist">
+              <button class="tab-btn" role="tab" aria-selected="true" data-tab="addr-auto">自动增量</button>
+              <button class="tab-btn" role="tab" aria-selected="false" data-tab="addr-fixed">固定地址</button>
+              <button class="tab-btn" role="tab" aria-selected="false" data-tab="addr-logical">逻辑地址</button>
+            </div>
+            <div class="tab-panel active" id="addr-auto" role="tabpanel">
+              <strong>APRD / APWR / APRW</strong>
+              <p>上电时主站还不知道拓扑中每个设备的固定地址，所以利用从站在帧经过时修改位置计数的机制，按物理顺序访问第 1、2、3 个从站。主要用于扫描和初始化。</p>
+            </div>
+            <div class="tab-panel" id="addr-fixed" role="tabpanel">
+              <strong>FPRD / FPWR / FPRW</strong>
+              <p>主站给每个从站设置一个 Station Address，之后就能按“从站地址 + ESC 寄存器偏移”访问指定设备。适合配置单个从站寄存器。</p>
+            </div>
+            <div class="tab-panel" id="addr-logical" role="tabpanel">
+              <strong>LRD / LWR / LRW</strong>
+              <p>主站构造一整片 32 位逻辑地址空间。每个从站的 FMMU 只匹配属于自己的位或字节。周期 PDO 通常使用逻辑寻址，一条 LRW 就能覆盖多个从站。</p>
+            </div>
+          </div>
+
+          <h3>FMMU 映射实验</h3>
+          <p>拖动“从站逻辑起始地址”和“PDO 长度”，观察一片主站逻辑内存如何映射到某个从站。</p>
+          <div class="address-lab">
+            <div class="lab-controls">
+              <div class="control-group"><label for="startAddr"><span>逻辑起始字节</span><b id="startValue">4</b></label><input id="startAddr" type="range" min="0" max="12" value="4"></div>
+              <div class="control-group"><label for="mapLength"><span>映射长度</span><b><span id="lengthValue">4</span> B</b></label><input id="mapLength" type="range" min="1" max="4" value="4"></div>
+              <p class="muted">FMMU 判断 Datagram 的逻辑地址范围是否与自身配置重叠，并把命中的字节映射到本地 Process RAM。</p>
+            </div>
+            <div>
+              <div class="logical-map" id="logicalMap" aria-label="16 字节逻辑过程映像"></div>
+              <p id="mapResult" class="muted" aria-live="polite"></p>
+            </div>
+          </div>
+        </section>
+
+        <section id="s4">
+          <span class="chapter">Chapter 4</span>
+          <h2>ESC 内部：FMMU、SyncManager 和 DPRAM</h2>
+          <p class="lead">这三个名词经常混在一起。它们其实回答三个不同问题：地址属于谁、缓冲区怎么管、数据实际放哪。</p>
+
+          <div class="concept-grid">
+            <div class="concept"><span class="num">FMMU</span><strong>地址翻译与位映射</strong><p>把主站的逻辑地址映射为本地物理内存地址；还能精确到 bit。</p></div>
+            <div class="concept"><span class="num">SM</span><strong>缓冲区协调</strong><p>SyncManager 管理一段 DPRAM 的方向、长度、邮箱/过程数据属性和访问握手。</p></div>
+            <div class="concept"><span class="num">DPRAM</span><strong>双口数据内存</strong><p>EtherCAT 端和 PDI/MCU 端都能访问，是网络数据与应用数据交接的地方。</p></div>
+          </div>
+
+          <div class="diagram">
+            <div class="diagram-title">从逻辑过程映像到 MCU 变量</div>
+            <div class="flow">
+              <div class="flow-node host"><strong>逻辑地址 0x1000</strong><small>主站 LRW Datagram</small></div><div class="arrow">→</div>
+              <div class="flow-node"><strong>FMMU</strong><small>匹配地址/位，翻译</small></div><div class="arrow">→</div>
+              <div class="flow-node esc"><strong>SM2 / DPRAM</strong><small>RxPDO 输出区</small></div><div class="arrow">→</div>
+              <div class="flow-node mcu"><strong>APPL_OutputMapping</strong><small>复制为控制字/目标值</small></div>
+            </div>
+          </div>
+
+          <h3>常见四个 SyncManager</h3>
+          <div class="table-wrap"><table>
+            <thead><tr><th>SM</th><th>常见用途</th><th>方向（站在从站看）</th><th>上级例程地址</th></tr></thead>
+            <tbody>
+              <tr><td>SM0</td><td>Mailbox Out</td><td>主站 → 从站</td><td><code>0x1000</code></td></tr>
+              <tr><td>SM1</td><td>Mailbox In</td><td>从站 → 主站</td><td><code>0x1100</code></td></tr>
+              <tr><td>SM2</td><td>Process Outputs / RxPDO</td><td>主站 → 从站</td><td><code>0x1200</code></td></tr>
+              <tr><td>SM3</td><td>Process Inputs / TxPDO</td><td>从站 → 主站</td><td><code>0x1300</code></td></tr>
+            </tbody>
+          </table></div>
+          <div class="callout warn"><strong>方向最容易叫反：</strong>RxPDO/TxPDO 是站在从站设备角度命名。RxPDO 是从站接收，所以携带控制命令；TxPDO 是从站发送，所以携带反馈状态。</div>
+        </section>
+
+        <section id="s5">
+          <span class="chapter">Chapter 5</span>
+          <h2>EtherCAT 从站状态机</h2>
+          <p>主站不能一上电就让从站输出电机命令。EtherCAT State Machine（ESM）用 INIT、PREOP、SAFEOP、OP 分阶段开放能力。点击按钮模拟合法迁移。</p>
+
+          <div class="state-machine" id="stateMachine">
+            <div class="state active" data-state="INIT"><strong>INIT</strong><small>基础寄存器可访问<br>无邮箱、无 PDO</small></div>
+            <div class="state" data-state="PREOP"><strong>PREOP</strong><small>邮箱可用<br>可进行 CoE / SDO 配置</small></div>
+            <div class="state" data-state="SAFEOP"><strong>SAFEOP</strong><small>输入 PDO 有效<br>输出保持安全状态</small></div>
+            <div class="state" data-state="OP"><strong>OP</strong><small>输入输出 PDO 均有效<br>进入周期控制</small></div>
+          </div>
+          <div class="state-controls">
+            <button class="btn primary" id="stateNext">下一状态</button>
+            <button class="btn" id="stateFault">模拟配置错误</button>
+            <button class="btn" id="stateReset">回到 INIT</button>
+          </div>
+          <p id="stateMessage" class="callout" aria-live="polite">当前 INIT：主站先扫描 ESC，分配 Station Address，并检查身份信息。</p>
+
+          <h3>状态变化时，SSC 会做什么</h3>
+          <div class="table-wrap"><table>
+            <thead><tr><th>迁移</th><th>关键动作</th><th>失败时常见 AL Status Code</th></tr></thead>
+            <tbody>
+              <tr><td>INIT → PREOP</td><td>启用 Mailbox，建立 CoE 通道</td><td>邮箱 SM 配置不合法</td></tr>
+              <tr><td>PREOP → SAFEOP</td><td>检查 PDO Assignment/Mapping，生成 Process Data 映射</td><td>Invalid SM / Invalid Output Configuration</td></tr>
+              <tr><td>SAFEOP → OP</td><td>允许输出 PDO 被应用使用</td><td>看门狗、同步或应用拒绝</td></tr>
+              <tr><td>任意 → INIT</td><td>关闭过程数据和邮箱，回到安全初态</td><td>通常由主站复位或故障恢复触发</td></tr>
+            </tbody>
+          </table></div>
+        </section>
+
+        <section id="s6">
+          <span class="chapter">Chapter 6</span>
+          <h2>PDO 与 SDO：高速公路和办事窗口</h2>
+          <div class="split">
+            <div class="compare"><strong>PDO：周期过程数据</strong><ul><li>每周期都传</li><li>没有索引/子索引开销</li><li>字节位置预先约定</li><li>适合控制字、目标值、反馈</li></ul></div>
+            <div class="compare"><strong>SDO：非周期参数访问</strong><ul><li>按 Index/SubIndex 读写</li><li>走 Mailbox/CoE</li><li>有请求和响应</li><li>适合参数、身份和诊断</li></ul></div>
+          </div>
+
+          <h3>一次 PDO 周期</h3>
+          <div class="diagram">
+            <div class="pdo-cycle">
+              <div class="device-block"><strong>KickCAT 主站过程映像</strong><div class="data-word"><span>Controlword</span><code>0x000F</code></div><div class="data-word"><span>Target velocity</span><code>1000</code></div></div>
+              <div class="cycle-arrows">→<br>←</div>
+              <div class="device-block"><strong>STM32 从站应用</strong><div class="data-word"><span>Statusword</span><code>0x0027</code></div><div class="data-word"><span>Actual velocity</span><code>982</code></div></div>
+            </div>
+            <div class="cycle-bar" aria-hidden="true"><div class="cycle-pulse"></div></div>
+            <p class="muted">每周期：主站发帧 → LAN9252 更新 RxPDO → STM32 取命令并更新反馈 → LAN9252 把 TxPDO 写回帧 → 主站接收。</p>
+          </div>
+
+          <h3>一次 SDO 读取</h3>
+          <div class="timeline">
+            <div class="time-step"><strong>1. 主站发 CoE SDO Upload Request</strong><p>例如读取 <code>0x1018:01</code> Vendor ID。</p></div>
+            <div class="time-step"><strong>2. 请求进入 SM0 Mailbox</strong><p>LAN9252 触发 AL Event，SSC 从邮箱取出请求。</p></div>
+            <div class="time-step"><strong>3. SSC 查询对象字典</strong><p>检查对象是否存在、访问权限、长度和当前状态。</p></div>
+            <div class="time-step"><strong>4. 响应写入 SM1 Mailbox</strong><p>主站在后续帧中读取响应；失败则返回 SDO Abort Code。</p></div>
+          </div>
+
+          <div class="callout key"><strong>为什么 PDO 快：</strong>PDO 不在每个周期携带 <code>0x6040</code> 这样的对象索引。双方早已约定“第 0～1 字节就是 Controlword”，因此只传纯数据。</div>
+        </section>
+
+        <section id="s7">
+          <span class="chapter">Chapter 7</span>
+          <h2>CoE 与对象字典</h2>
+          <p>CoE（CANopen over EtherCAT）复用了 CANopen 的对象字典和设备配置思想。它不是在网线上发送 CAN 帧，而是把 CANopen 风格的服务装入 EtherCAT Mailbox。</p>
+
+          <h3>对象地址 = Index + SubIndex</h3>
+          <div class="table-wrap"><table>
+            <thead><tr><th>范围/对象</th><th>用途</th><th>例子</th></tr></thead>
+            <tbody>
+              <tr><td><code>0x1000–0x1FFF</code></td><td>通信与身份对象</td><td><code>0x1018</code> Identity Object</td></tr>
+              <tr><td><code>0x1600</code></td><td>RxPDO Mapping</td><td>每个子项描述一个映射对象及 bit 长度</td></tr>
+              <tr><td><code>0x1A00</code></td><td>TxPDO Mapping</td><td>例如 Statusword、Actual Position</td></tr>
+              <tr><td><code>0x1C12 / 0x1C13</code></td><td>SM PDO Assignment</td><td>指定 SM2/SM3 使用哪些 PDO</td></tr>
+              <tr><td><code>0x6000–0x6FFF</code></td><td>设备 Profile</td><td>CiA402 的 <code>0x6040</code>、<code>0x6041</code></td></tr>
+            </tbody>
+          </table></div>
+
+          <h3>PDO 映射值怎么读</h3>
+          <p>一个 32 位映射描述符通常编码为：</p>
+          <pre><code>31                   16 15          8 7          0
++----------------------+--------------+------------+
+|      Index (16)      | SubIndex (8) | Bits (8)   |
++----------------------+--------------+------------+
+
+0x60400010 = Index 0x6040, SubIndex 0, 长度 0x10 = 16 bit
+0x607A0020 = Index 0x607A, SubIndex 0, 长度 0x20 = 32 bit</code></pre>
+
+          <p>所以一个典型 RxPDO <code>0x1600</code> 可以依次放：</p>
+          <pre><code>0x60400010  Controlword       16 bit
+0x607A0020  Target Position   32 bit
+0x60FF0020  Target Velocity   32 bit
+0x60600008  Mode of Operation  8 bit</code></pre>
+
+          <div class="callout warn"><strong>字节序：</strong>EtherCAT 字段和对象通常按 little-endian 解释。STM32G474 本身也是 little-endian，但仍应通过明确的类型和拷贝处理，避免未对齐访问、结构体填充和编译器差异。</div>
+        </section>
+
+        <section id="s8">
+          <span class="chapter">Chapter 8</span>
+          <h2>CiA402：EtherCAT OP 不等于电机已使能</h2>
+          <p class="lead">这里存在两台状态机：EtherCAT 从站状态机管“通信是否开放”，CiA402 驱动状态机管“功率级和运动是否允许”。二者必须同时正确。</p>
+
+          <div class="diagram">
+            <div class="flow">
+              <div class="flow-node host"><strong>EtherCAT OP</strong><small>PDO 通道已开放</small></div><div class="arrow">+</div>
+              <div class="flow-node esc"><strong>CiA402 Operation enabled</strong><small>控制字完成使能序列</small></div><div class="arrow">=</div>
+              <div class="flow-node motor"><strong>FOC 接受目标值</strong><small>无故障且模式有效</small></div>
+            </div>
+          </div>
+
+          <h3>常用对象</h3>
+          <div class="table-wrap"><table>
+            <thead><tr><th>对象</th><th>名称</th><th>方向</th><th>作用</th></tr></thead>
+            <tbody>
+              <tr><td><code>0x6040</code></td><td>Controlword</td><td>主站 → 从站</td><td>Shutdown、Switch on、Enable operation、Fault reset</td></tr>
+              <tr><td><code>0x6041</code></td><td>Statusword</td><td>从站 → 主站</td><td>反馈 Ready、Switched on、Enabled、Fault 等状态</td></tr>
+              <tr><td><code>0x6060 / 0x6061</code></td><td>Mode / Mode display</td><td>双向</td><td>选择并确认 CSP、CSV、CST 等模式</td></tr>
+              <tr><td><code>0x607A / 0x6064</code></td><td>目标/实际位置</td><td>双向</td><td>位置环命令与反馈</td></tr>
+              <tr><td><code>0x60FF / 0x606C</code></td><td>目标/实际速度</td><td>双向</td><td>速度环命令与反馈</td></tr>
+              <tr><td><code>0x6071 / 0x6077</code></td><td>目标/实际转矩</td><td>双向</td><td>转矩/电流控制命令与反馈</td></tr>
+            </tbody>
+          </table></div>
+
+          <h3>最常见的使能序列</h3>
+          <div class="timeline">
+            <div class="time-step"><strong>Shutdown：Controlword <code>0x0006</code></strong><p>驱动从 Switch on disabled 进入 Ready to switch on。</p></div>
+            <div class="time-step"><strong>Switch on：<code>0x0007</code></strong><p>进入 Switched on，功率级准备就绪。</p></div>
+            <div class="time-step"><strong>Enable operation：<code>0x000F</code></strong><p>进入 Operation enabled，此时才允许 FOC 使用目标值。</p></div>
+            <div class="time-step"><strong>Fault reset：设置 bit 7</strong><p>只在故障原因已解除时进行复位，不能用它掩盖持续故障。</p></div>
+          </div>
+          <div class="callout"><strong>实现要点：</strong>不要只比较整个 Statusword 是否等于某个常数。规范中的状态判断使用掩码，因为制造商位、远程位、目标到达位等可能同时变化。</div>
+        </section>
+
+        <section id="s9">
+          <span class="chapter">Chapter 9</span>
+          <h2>DC 分布式时钟：让所有从站在同一时刻行动</h2>
+          <p>PDO 周期稳定不代表各从站本地控制中断严格同相。Distributed Clocks（DC）通过每个支持 DC 的 ESC 内部时钟、链路延迟测量和偏差校正，建立统一时间基准。</p>
+
+          <div class="diagram">
+            <div class="diagram-title">SYNC0 驱动的典型控制链</div>
+            <div class="flow">
+              <div class="flow-node host"><strong>参考时钟</strong><small>主站选择一个 DC 从站</small></div><div class="arrow">→</div>
+              <div class="flow-node esc"><strong>LAN9252 DC</strong><small>比较/校正本地系统时间</small></div><div class="arrow">→</div>
+              <div class="flow-node"><strong>SYNC0 脉冲</strong><small>例如每 1 ms 输出</small></div><div class="arrow">→</div>
+              <div class="flow-node mcu"><strong>STM32 控制任务</strong><small>在确定相位执行 PDO/控制</small></div>
+            </div>
+          </div>
+
+          <p>DC 需要处理四件事：</p>
+          <ol>
+            <li>测量各段传播延迟。</li>
+            <li>选择 Reference Clock。</li>
+            <li>调整从站本地 System Time 的 Offset 和 Drift。</li>
+            <li>配置 SYNC0/SYNC1 的周期与相位。</li>
+          </ol>
+          <div class="callout warn"><strong>移植顺序：</strong>先让 FreeRun 模式下 PDO 稳定进入 OP，再做 SyncManager 同步，最后做 DC。否则“进不了 OP”会同时混入 SPI、PDO 映射、ESI 和时钟四类变量，定位非常慢。</div>
+        </section>
+
+        <section id="s10">
+          <span class="chapter">Chapter 10</span>
+          <h2>LAN9252 与 STM32 的 SPI PDI</h2>
+          <p>LAN9252 的 EtherCAT 网络侧由芯片硬件处理；STM32 面对的是 PDI（Process Data Interface）。你的板使用 SPI，因此 MCU 不解析网线上的完整 EtherCAT 帧，而是访问 LAN9252 的寄存器和内存窗口。</p>
+
+          <div class="pin-grid">
+            <div class="pin"><strong>SPI3 SCK</strong><small>PC10，时钟</small></div>
+            <div class="pin"><strong>SPI3 MISO</strong><small>PC11，ESC → MCU</small></div>
+            <div class="pin"><strong>SPI3 MOSI</strong><small>PC12，MCU → ESC</small></div>
+            <div class="pin"><strong>CS</strong><small>PA3，片选</small></div>
+            <div class="pin"><strong>ESC_INT</strong><small>PA4，AL Event 中断</small></div>
+            <div class="pin"><strong>SYNC0</strong><small>PA5，DC 同步中断</small></div>
+            <div class="pin"><strong>SYNC1</strong><small>PA6，可选同步信号</small></div>
+            <div class="pin"><strong>RESET</strong><small>PC4，硬件复位</small></div>
+          </div>
+
+          <h3>三类底层访问</h3>
+          <div class="table-wrap"><table>
+            <thead><tr><th>访问</th><th>用途</th><th>关键机制</th></tr></thead>
+            <tbody>
+              <tr><td>直接 SPI 寄存器</td><td>访问 LAN9252 系统寄存器</td><td><code>0x03</code> 读、<code>0x0B</code> Fast Read、<code>0x02</code> 写</td></tr>
+              <tr><td>CSR</td><td>间接访问 EtherCAT Core Register</td><td>写 CSR Data/Command，轮询 Busy，取回结果</td></tr>
+              <tr><td>PRAM FIFO</td><td>批量访问 Process RAM</td><td>配置地址和长度，通过读写 FIFO 搬运 PDO/邮箱数据</td></tr>
+            </tbody>
+          </table></div>
+
+          <h3>一次 ESC CSR 读取的伪代码</h3>
+          <pre><code>uint32_t lan9252_csr_read(uint16_t esc_addr, uint8_t size)
+{
+    spi_write(CSR_CMD, make_read_cmd(esc_addr, size));
+
+    for (uint32_t retry = 0; retry &lt; CSR_TIMEOUT; ++retry) {
+        uint32_t cmd = spi_read(CSR_CMD);
+        if ((cmd &amp; CSR_BUSY) == 0) {
+            return spi_read(CSR_DATA);
+        }
+    }
+
+    report_esc_timeout();
+    return 0;
+}</code></pre>
+          <div class="callout key"><strong>禁止无限轮询 Busy：</strong>如果 SPI 断线、LAN9252 未出复位或时序配置错误，无限 while 会把整个实时控制程序锁死。每次等待都必须有超时和错误计数。</div>
+
+          <h3>中断分别代表什么</h3>
+          <ul>
+            <li><strong>ESC_INT / AL Event：</strong>邮箱到达、SM 数据更新、状态请求等 ESC 事件。</li>
+            <li><strong>SYNC0：</strong>DC 产生的确定时刻脉冲，适合驱动同步应用任务。</li>
+            <li><strong>1 ms Timer：</strong>SSC 的协议定时、状态机和超时维护，不等同于 10 kHz FOC 电流环。</li>
+          </ul>
+        </section>
+
+        <section id="s11">
+          <span class="chapter">Chapter 11</span>
+          <h2>移植到当前 G474 工程的代码结构</h2>
+          <p>上级例程已经包含 Beckhoff SSC 5.11、CoE、SDO、PDO 和 CiA402。最稳妥的路线不是重写 EtherCAT，而是移植协议栈及 LAN9252 端口层，再建立一个非常薄的 FOC 适配层。</p>
+
+          <div class="diagram">
+            <div class="layer-stack">
+              <div class="layer"><strong>FOC 应用层</strong><b>foc_ecat_adapter.c</b><span>命令快照、反馈快照、限幅、故障联锁</span></div>
+              <div class="layer"><strong>设备模型</strong><b>cia402appl / objdef</b><span>Controlword、Statusword、模式和对象字典</span></div>
+              <div class="layer"><strong>SSC 协议栈</strong><b>ecatslv / coe / mailbox</b><span>ESM、PDO、SDO、CoE、看门狗</span></div>
+              <div class="layer"><strong>硬件端口</strong><b>ethercat_port.c</b><span>HW_EscRead/Write、ISR、Timer、GPIO</span></div>
+              <div class="layer"><strong>芯片驱动</strong><b>lan9252_pdi.c</b><span>SPI Direct、CSR、PRAM、超时和复位</span></div>
+            </div>
+          </div>
+
+          <h3>主循环与中断的职责</h3>
+          <pre><code>int main(void)
+{
+    board_init();
+    foc_init();
+    lan9252_init();
+    ecat_init();
+
+    for (;;) {
+        ecat_main();          // ESM、Mailbox、非同步协议工作
+        foc_publish_status(); // 生成一致的 TxPDO 快照
+        service_diagnostics();
+    }
+}
+
+// TIM3 10 kHz：只做确定时间的 FOC 快环
+void foc_control_isr(void)
+{
+    foc_read_command_snapshot();
+    foc_current_loop();
+}
+
+// ESC_INT：快速响应 EtherCAT 事件，不做复杂计算
+void esc_event_isr(void)
+{
+    pdi_isr();
+}</code></pre>
+
+          <h3>PDO 与 FOC 之间不要直接共享一堆散变量</h3>
+          <pre><code>typedef struct {
+    uint16_t controlword;
+    int8_t   mode;
+    int32_t  target_position;
+    int32_t  target_velocity;
+    int16_t  target_torque;
+    uint32_t sequence;
+} FocCommandSnapshot;
+
+typedef struct {
+    uint16_t statusword;
+    int8_t   mode_display;
+    int32_t  actual_position;
+    int32_t  actual_velocity;
+    int16_t  actual_torque;
+    uint16_t error_code;
+    uint32_t sequence;
+} FocStatusSnapshot;</code></pre>
+          <p>EtherCAT 上下文完成一整组字段后再发布 command snapshot；FOC ISR 只在序号一致时接收。反馈同理。这样可避免 32 位目标值更新到一半时被另一个中断读走。</p>
+
+          <h3>迁移前的硬资源检查</h3>
+          <ul class="checklist">
+            <li>确认 PC10/PC11/PC12、PA3～PA6、PC4 在实际 PCB 上与 LAN9252 相连。</li>
+            <li>新增 SPI3：Mode 0、8-bit、MSB first，先用低速验证，再提升到例程约 10.6 Mbit/s。</li>
+            <li>新增 ESC_INT、SYNC0、SYNC1 的 EXTI，并明确中断优先级。</li>
+            <li>新增 TIM2 或其他独立 1 ms 协议定时器，不复用 TIM3 10 kHz FOC 定时器。</li>
+            <li>核对 LAN9252 EEPROM/SII、ESI XML、固件对象字典的 Vendor ID/Product Code/Revision。</li>
+            <li>检查 SSC 源码许可，确认允许在目标产品中复用。</li>
+          </ul>
+        </section>
+
+        <section id="s12">
+          <span class="chapter">Chapter 12</span>
+          <h2>不用 TwinCAT：KickCAT 主站怎么工作</h2>
+          <p>你下载的 KickCAT 已经构建出了工具和例程。Windows 下它通过 Npcap 直接收发二层 Ethernet 帧。这里的“网卡接口名”是 Npcap 设备名，不是 IP 地址。</p>
+
+          <h3>环境原则</h3>
+          <ul>
+            <li>使用有线以太网口，最好由 EtherCAT 独占。</li>
+            <li>安装与当前程序架构匹配的 Npcap；必要时以管理员权限运行。</li>
+            <li>先断开 Wi-Fi、VPN 和虚拟网卡对选择过程的干扰，但不要盲目卸载驱动。</li>
+            <li>Windows 适合扫描、SDO/PDO 和功能验证，不适合最终严格 1 ms 硬实时。</li>
+          </ul>
+
+          <h3>KickCAT 主站代码的生命线</h3>
+          <pre><code>createSockets(interface, "")
+        ↓
+Bus bus(link)
+        ↓
+bus.init()                    // 扫描拓扑、分配地址、读身份
+        ↓
+request PRE_OP                // 开邮箱，SDO 配置 PDO
+        ↓
+bus.createMapping(iomap)      // 建主站逻辑过程映像 / FMMU
+        ↓
+request SAFE_OP → OP
+        ↓
+每周期 sendLogicalRead/Write // 收发 PDO
+        ↓
+processAwaitingFrames()       // 校验帧和 WKC，更新 iomap</code></pre>
+
+          <h3>建议使用工具的顺序</h3>
+          <div class="timeline">
+            <div class="time-step"><strong><code>scan_topology.exe</code></strong><p>第一目标只是“发现 1 个 LAN9252 从站，身份正确”。</p></div>
+            <div class="time-step"><strong><code>kickui.exe</code></strong><p>观察 INIT/PREOP/SAFEOP/OP、AL Status Code，读取 SDO。</p></div>
+            <div class="time-step"><strong>读取 <code>0x1018</code></strong><p>核对 Vendor ID、Product Code、Revision、Serial number。</p></div>
+            <div class="time-step"><strong>参考 <code>ds402_sinus.cc</code></strong><p>使用 DS402 Drive 包装器配置 PDO，并执行状态机。</p></div>
+            <div class="time-step"><strong>改成自己的控制程序</strong><p>固定周期交换 iomap，把目标值和反馈值接入 UI、日志或算法。</p></div>
+          </div>
+
+          <div class="callout"><strong>ESI 与主站的关系：</strong>ESI 是设备能力说明书，主站据此知道对象、默认 PDO、同步模式和身份。在线扫描读到的身份通常来自 SII EEPROM。二者不一致时，主站可能报设备不匹配。</div>
+        </section>
+
+        <section id="s13">
+          <span class="chapter">Chapter 13</span>
+          <h2>分层定位，而不是盯着“进不了 OP”</h2>
+          <div class="table-wrap"><table>
+            <thead><tr><th>现象</th><th>先查哪一层</th><th>最有价值的证据</th></tr></thead>
+            <tbody>
+              <tr><td>读不到 LAN9252 ID</td><td>电源、复位、SPI Mode、CS、MISO/MOSI</td><td>逻辑分析仪波形；Byte Test；Chip ID</td></tr>
+              <tr><td>KickCAT 扫不到从站</td><td>PHY、网线、端口方向、SII、Npcap 网卡</td><td>Link/ACT LED；Wireshark <code>eth.type == 0x88a4</code></td></tr>
+              <tr><td>只能到 INIT</td><td>Mailbox SM、EEPROM 身份、SSC 初始化</td><td>AL Status 与 AL Status Code</td></tr>
+              <tr><td>PREOP 到不了 SAFEOP</td><td>PDO Mapping、SM 长度/地址、FMMU</td><td><code>0x1C12/0x1C13</code>、映射总 bit 数、ESI</td></tr>
+              <tr><td>SAFEOP 到不了 OP</td><td>输出看门狗、同步、应用拒绝</td><td>AL Status Code、SM watchdog、SYNC0 波形</td></tr>
+              <tr><td>OP 但电机不转</td><td>CiA402，而非 EtherCAT ESM</td><td>Controlword/Statusword、Mode、Error code</td></tr>
+              <tr><td>偶发 WKC 错误</td><td>实时性、链路质量、周期超时</td><td>expected/actual WKC、丢帧计数、周期抖动</td></tr>
+              <tr><td>FOC 偶发目标跳变</td><td>MCU 并发和数据一致性</td><td>快照 sequence、ISR 时长、未对齐/非原子访问</td></tr>
+            </tbody>
+          </table></div>
+
+          <h3>建议始终记录的诊断量</h3>
+          <ul class="checklist">
+            <li>LAN9252 SPI 超时次数、CSR/PRAM 超时地址。</li>
+            <li>当前 AL State、AL Status Code、最后一次状态请求。</li>
+            <li>PDO 周期计数、expected WKC、actual WKC、连续错误次数。</li>
+            <li>Mailbox/SDO Abort Code。</li>
+            <li>SYNC0 周期、最大/最小间隔、FOC ISR 最大执行时间。</li>
+            <li>CiA402 Controlword、Statusword、Mode、Error Code。</li>
+          </ul>
+        </section>
+
+        <section id="s14">
+          <span class="chapter">Chapter 14</span>
+          <h2>从零到转动的最小验证路线</h2>
+          <div class="timeline">
+            <div class="time-step"><strong>阶段 A：只验证 SPI</strong><p>复位 LAN9252，读 Byte Test 和 Chip ID。此时不要运行 SSC，不接电机输出。</p></div>
+            <div class="time-step"><strong>阶段 B：只验证 ESC</strong><p>读 ESC 基础寄存器、DPRAM 大小、AL Status，确认 CSR 和 PRAM 都可靠。</p></div>
+            <div class="time-step"><strong>阶段 C：主站扫描</strong><p>KickCAT 发现设备；核对 <code>0x1018</code> 与 SII/ESI。</p></div>
+            <div class="time-step"><strong>阶段 D：邮箱</strong><p>INIT → PREOP；通过 SDO 读取身份、对象列表和一个自定义参数。</p></div>
+            <div class="time-step"><strong>阶段 E：最小 PDO</strong><p>先映射一个 16-bit 输出计数器和一个 16-bit 输入回显，进入 SAFEOP/OP。</p></div>
+            <div class="time-step"><strong>阶段 F：CiA402，不上功率</strong><p>验证 Controlword/Statusword 状态迁移，模拟位置和速度反馈。</p></div>
+            <div class="time-step"><strong>阶段 G：接入 FOC</strong><p>先低限幅、空载、小目标；实现通信丢失自动停机和输出看门狗。</p></div>
+            <div class="time-step"><strong>阶段 H：同步和稳定性</strong><p>最后加入 DC/SYNC0，做长时间 WKC、抖动、断线重连和故障注入测试。</p></div>
+          </div>
+          <div class="callout good"><strong>可交付的第一里程碑：</strong>KickCAT 能扫描设备、读取 <code>0x1018</code>，进入 OP，并让一个主站计数值经 RxPDO 到 STM32 后加一，再通过 TxPDO 返回。这个闭环通了，再接电机。</div>
+        </section>
+
+        <section id="s15">
+          <span class="chapter">Chapter 15</span>
+          <h2>从 CAN 迁移到 EtherCAT：信号不变，承载方式改变</h2>
+          <p class="lead">迁移的核心不是把 CAN ID 换成 EtherCAT 地址，而是重新定义“周期过程数据”和“非周期参数”。CAN 的 ID、长度和字节位置，需要变成 EtherCAT 的 PDO 映射、对象字典和状态机语义。</p>
+
+          <h3>先把旧 CAN 协议写成信号清单</h3>
+          <p>假设旧系统使用扩展帧 <code>0x200</code> 下发控制命令，<code>0x280</code> 返回状态。下面只是迁移示例，实际字段应以你的 CAN 协议文档和 FOC 量纲为准。</p>
+          <div class="table-wrap"><table>
+            <thead><tr><th>CAN 帧</th><th>字节</th><th>信号</th><th>量纲/编码</th><th>迁移后的归宿</th></tr></thead>
+            <tbody>
+              <tr><td><code>0x200</code> 控制</td><td>0</td><td>使能/模式</td><td>bit0 Enable，bit1 Fault Reset，bit2..4 Mode</td><td>RxPDO <code>0x6040</code> + <code>0x6060</code></td></tr>
+              <tr><td><code>0x200</code> 控制</td><td>2–3</td><td>目标速度</td><td>int16，rpm 或内部速度单位</td><td>RxPDO <code>0x60FF</code>，通常 int32</td></tr>
+              <tr><td><code>0x200</code> 控制</td><td>4–5</td><td>电流/转矩限制</td><td>uint16，0.1 A/LSB</td><td>RxPDO <code>0x6071</code> 或自定义对象</td></tr>
+              <tr><td><code>0x200</code> 控制</td><td>6–7</td><td>序号/保活</td><td>递增计数器</td><td>可作为自定义 RxPDO，或由 EtherCAT WKC/看门狗替代</td></tr>
+              <tr><td><code>0x280</code> 状态</td><td>0–1</td><td>状态字</td><td>bit 编码</td><td>TxPDO <code>0x6041</code></td></tr>
+              <tr><td><code>0x280</code> 状态</td><td>2–3</td><td>实际速度</td><td>int16</td><td>TxPDO <code>0x606C</code>，通常 int32</td></tr>
+              <tr><td><code>0x280</code> 状态</td><td>4–5</td><td>故障码</td><td>uint16</td><td>TxPDO <code>0x603F</code></td></tr>
+              <tr><td><code>0x280</code> 状态</td><td>6–7</td><td>实际电流</td><td>int16，0.1 A/LSB</td><td>TxPDO <code>0x6077</code> 或自定义对象</td></tr>
+            </tbody>
+          </table></div>
+
+          <div class="callout key"><strong>迁移原则：</strong>CAN ID 是“消息类别”；EtherCAT PDO 是“预先约定的内存布局”。不要把 <code>0x200</code> 硬编码成某个 EtherCAT 地址。先确定信号含义，再决定它属于哪个 PDO 或 SDO。</div>
+
+          <h3>CAN 与 EtherCAT 的对应关系</h3>
+          <div class="table-wrap"><table>
+            <thead><tr><th>CAN 概念</th><th>EtherCAT 对应物</th><th>区别</th></tr></thead>
+            <tbody>
+              <tr><td>CAN ID</td><td>PDO 方向 + 映射顺序；非周期访问用 Index/SubIndex</td><td>不再靠 ID 广播筛选，而是靠配置好的逻辑地址和 FMMU</td></tr>
+              <tr><td>DLC</td><td>PDO 映射总长度、SM/FMMU 长度</td><td>长度在配置阶段确定，周期帧只带数据</td></tr>
+              <tr><td>发送一帧</td><td>主站周期 Datagram（常用 LRW）</td><td>一帧可同时服务多个从站</td></tr>
+              <tr><td>接收回调</td><td>RxPDO 更新 + SSC 映射回调/同步事件</td><td>从站通常不解析完整 Ethernet 帧</td></tr>
+              <tr><td>超时/离线</td><td>WKC、SM watchdog、AL 状态、CiA402 Fault</td><td>诊断证据更多，但需要分层判断</td></tr>
+              <tr><td>CANopen 对象</td><td>CoE 对象字典</td><td>CiA402 对象号大多可保留，物理承载从 CAN 变为 EtherCAT Mailbox/PDO</td></tr>
+            </tbody>
+          </table></div>
+
+          <h3>例子一：STM32 接收 RxPDO 控制命令</h3>
+          <p>下例把一个 RxPDO 解释为：控制字、模式、目标速度、目标转矩。生成式 SSC 工程的变量名可能不同，所以重点看数据流和边界检查。</p>
+          <pre><code>typedef struct {
+    uint16_t controlword;       // 0x6040
+    int8_t   mode;              // 0x6060
+    int32_t  target_velocity;   // 0x60FF
+    int16_t  target_torque;     // 0x6071
+} RxPdo;
+
+static volatile RxPdo rx_pdo;
+static FocCommandSnapshot command_snapshot;
+
+void APPL_OutputMapping(const uint8_t *process_ram, uint16_t length)
+{
+    if (length &lt; 9U) {
+        return;                 // 2 + 1 + 4 + 2 = 9 bytes
+    }
+
+    RxPdo next;
+    memcpy(&amp;next.controlword,       process_ram + 0, 2);
+    memcpy(&amp;next.mode,              process_ram + 2, 1);
+    memcpy(&amp;next.target_velocity,   process_ram + 3, 4);
+    memcpy(&amp;next.target_torque,     process_ram + 7, 2);
+
+    // 在协议上下文中一次性发布，FOC ISR 只读取已完成的快照
+    command_snapshot.controlword = next.controlword;
+    command_snapshot.mode = next.mode;
+    command_snapshot.target_velocity = next.target_velocity;
+    command_snapshot.target_torque = next.target_torque;
+    command_snapshot.sequence++;
+}
+
+void foc_control_isr(void)
+{
+    FocCommandSnapshot cmd = command_snapshot;
+    cia402_update(cmd.controlword, cmd.mode);
+    foc_set_velocity(cmd.target_velocity);
+    foc_set_torque_limit(cmd.target_torque);
+    foc_current_loop();
+}</code></pre>
+          <div class="callout warn"><strong>不要直接把接收缓冲区当成 FOC 变量：</strong>PDO 可能在另一个中断或主循环阶段更新。应先复制成完整快照，再做 CiA402 检查、限幅和单位换算。</div>
+
+          <h3>例子二：STM32 发送 TxPDO 状态反馈</h3>
+          <pre><code>typedef struct {
+    uint16_t statusword;        // 0x6041
+    int8_t   mode_display;      // 0x6061
+    int32_t  actual_velocity;   // 0x606C
+    int32_t  actual_position;   // 0x6064
+    uint16_t error_code;        // 0x603F
+} TxPdo;
+
+static volatile FocStatusSnapshot status_snapshot;
+
+void foc_publish_status(void)
+{
+    FocStatusSnapshot next = {
+        .statusword = cia402_get_statusword(),
+        .mode_display = foc_get_mode(),
+        .actual_velocity = foc_get_velocity(),
+        .actual_position = encoder_get_position(),
+        .error_code = foc_get_error_code()
+    };
+    status_snapshot = next;
+}
+
+void APPL_InputMapping(uint8_t *process_ram, uint16_t capacity)
+{
+    if (capacity &lt; 13U) {
+        return;                 // 2 + 1 + 4 + 4 + 2 = 13，按实际映射核对
+    }
+
+    TxPdo tx = status_snapshot;
+    memcpy(process_ram + 0,  &amp;tx.statusword,       2);
+    memcpy(process_ram + 2,  &amp;tx.mode_display,     1);
+    memcpy(process_ram + 3,  &amp;tx.actual_velocity,   4);
+    memcpy(process_ram + 7,  &amp;tx.actual_position,   4);
+    memcpy(process_ram + 11, &amp;tx.error_code,       2);
+}</code></pre>
+          <p class="muted">这组字段实际占 13 字节。工程中应改成由最终 PDO 映射或生成代码提供的精确长度常量。</p>
+
+          <h3>例子三：用 EtherCAT 替代 CAN 的“使能 + 目标速度”</h3>
+          <div class="table-wrap"><table>
+            <thead><tr><th>动作</th><th>CAN 时代</th><th>EtherCAT 时代</th><th>从站动作</th></tr></thead>
+            <tbody>
+              <tr><td>准备驱动</td><td>发送 <code>0x200</code>，Enable=0</td><td>RxPDO Controlword = <code>0x0006</code></td><td>CiA402 进入 Ready to switch on</td></tr>
+              <tr><td>上电开关</td><td>继续发送 Enable 位</td><td>Controlword = <code>0x0007</code></td><td>进入 Switched on</td></tr>
+              <tr><td>允许运行</td><td>发送 Enable=1</td><td>Controlword = <code>0x000F</code></td><td>进入 Operation enabled</td></tr>
+              <tr><td>下发速度</td><td>CAN <code>0x200</code> 字节 2–3</td><td>RxPDO <code>0x60FF</code> = 1000</td><td>FOC 按模式和限幅执行</td></tr>
+              <tr><td>读取状态</td><td>解析 CAN <code>0x280</code></td><td>读取 TxPDO <code>0x6041</code>/<code>0x606C</code></td><td>主站检查状态、速度、故障</td></tr>
+              <tr><td>急停</td><td>约定某个 CAN 命令</td><td>Controlword 清除 Enable 或写入应用急停对象</td><td>关闭扭矩，并由硬件安全链路兜底</td></tr>
+            </tbody>
+          </table></div>
+
+          <h3>例子四：KickCAT 主站周期收发 PDO</h3>
+          <pre><code>// 伪代码：API 名称按你本地 KickCAT 版本调整
+auto [nominal, redundancy] = createSockets("EtherCAT 网卡名", "");
+auto link = std::make_shared&lt;Link&gt;(nominal, redundancy, callback);
+Bus bus{link};
+
+bus.init();
+bus.requestState(State::PRE_OP);
+bus.waitForState(State::PRE_OP, timeout);
+
+// 先用 SDO 配置或确认 PDO，再创建主站过程映像
+// 例如：RxPDO = 0x6040 + 0x6060 + 0x60FF + 0x6071
+bus.createMapping(iomap, sizeof(iomap));
+bus.requestState(State::SAFE_OP);
+bus.waitForState(State::SAFE_OP, timeout);
+bus.requestState(State::OPERATIONAL);
+bus.waitForState(State::OPERATIONAL, timeout);
+
+for (;;) {
+    iomap.controlword = 0x000F;       // Enable operation
+    iomap.mode = 9;                   // 示例：CSV，按设备支持的模式填写
+    iomap.target_velocity = 1000;     // 目标速度，按 ESI/对象量纲
+    iomap.target_torque = 0;
+
+    bus.sendLogicalRead(iomap_address, iomap_size);
+    bus.sendLogicalWrite(iomap_address, iomap_size);
+    bus.finalizeDatagrams();
+    bus.processAwaitingFrames();
+
+    printf("status=0x%04x vel=%ld wkc=%u\\n",
+           iomap.statusword, iomap.actual_velocity, bus.getWorkingCounter());
+    timer.wait_next_tick();
+}</code></pre>
+          <div class="callout"><strong>主站发指令的本质：</strong>写入主站过程映像中的 RxPDO 字段，然后发送逻辑写 Datagram。主站不需要知道 LAN9252 的 SPI 寄存器；那是从站内部端口层的工作。</div>
+
+          <h3>例子五：参数用 SDO，不要硬塞进 PDO</h3>
+          <pre><code>// 伪代码：启动阶段读取与写入参数
+uint32_t vendor = sdo_upload&lt;uint32_t&gt;(slave, 0x1018, 1);
+int32_t max_velocity = sdo_upload&lt;int32_t&gt;(slave, 0x607F, 0);
+sdo_download&lt;int32_t&gt;(slave, 0x6080, 0, 3000); // 最大速度示例
+
+// 周期控制只放实时信号：
+// RxPDO: Controlword / Mode / Target velocity
+// TxPDO: Statusword / Actual velocity / Error code</code></pre>
+          <p>经验规则：控制环每周期都用到的值进 PDO；只在启动、换配方或诊断时访问的值进 SDO。把最大速度、加速度、编码器方向等参数放进 PDO，会增加周期带宽，也会让安全边界变得不清晰。</p>
+
+          <h3>推荐迁移顺序</h3>
+          <ol>
+            <li>冻结旧 CAN 协议：列出每个 ID、字段、字节序、缩放、超时和故障语义。</li>
+            <li>定义 EtherCAT ESI 和对象字典：优先采用 CiA402 标准对象，确有需要再加厂商自定义对象。</li>
+            <li>先做一个最小 RxPDO/TxPDO 回环，不接功率级。</li>
+            <li>实现 CiA402 状态机映射，确保通信 OP 和驱动 Operation enabled 分开判断。</li>
+            <li>接入 FOC：目标值做单位换算、限幅、斜坡；反馈值带有效性和故障码。</li>
+            <li>用 WKC、SM watchdog、CiA402 Fault 三层机制替代 CAN 的单一超时判断。</li>
+            <li>最后做 DC、断线重连、异常注入和长时间运行。</li>
+          </ol>
+          <div class="callout good"><strong>兼容旧上位机的过渡方案：</strong>可以保留一个 CAN-EtherCAT 网关，让旧 CAN 主站继续发原来的 <code>0x200/0x280</code>，网关把信号转换为 EtherCAT PDO。这样能先验证下位机 EtherCAT，再独立迁移上位机，但网关不应成为最终闭环的长期实时瓶颈。</div>
+        </section>
+
+        <section id="s16">
+          <span class="chapter">Chapter 16</span>
+          <h2>五道题检查是否真正理解</h2>
+          <div class="quiz">
+            <div class="quiz-q" data-answer="1" data-explain="LAN9252 是 ESC，既含 EtherCAT 控制器，也承担网络侧实时帧处理；STM32 通过 SPI PDI 访问它。"><p>1. LAN9252 在系统中主要是什么？</p><div class="answers"><button class="answer">普通 TCP/IP 网卡</button><button class="answer">EtherCAT Slave Controller</button><button class="answer">CAN 收发器</button></div><div class="feedback"></div></div>
+            <div class="quiz-q" data-answer="2" data-explain="PDO 预先定义字节布局，只传过程值，所以适合每周期实时交换；SDO 适合按索引访问参数。"><p>2. 哪种方式最适合每 1 ms 发送目标速度？</p><div class="answers"><button class="answer">HTTP</button><button class="answer">SDO</button><button class="answer">PDO</button></div><div class="feedback"></div></div>
+            <div class="quiz-q" data-answer="0" data-explain="FMMU 把主站逻辑地址映射到从站本地 DPRAM；SyncManager 负责缓冲区属性与协调。"><p>3. 谁负责逻辑地址到本地内存的映射？</p><div class="answers"><button class="answer">FMMU</button><button class="answer">CiA402</button><button class="answer">PHY</button></div><div class="feedback"></div></div>
+            <div class="quiz-q" data-answer="1" data-explain="OP 只说明 EtherCAT 过程数据可用。电机还必须满足 CiA402 Operation enabled、无故障和应用安全条件。"><p>4. EtherCAT 进入 OP 后，电机是否必然已经使能？</p><div class="answers"><button class="answer">是</button><button class="answer">否</button></div><div class="feedback"></div></div>
+            <div class="quiz-q" data-answer="2" data-explain="WKC 是工作计数器，用来证明预期的从站操作被执行；它不是 CRC，也不是从站数量的简单固定值。"><p>5. WKC 的主要用途是什么？</p><div class="answers"><button class="answer">表示 Ethernet CRC</button><button class="answer">表示电机速度</button><button class="answer">检查预期读写是否成功执行</button></div><div class="feedback"></div></div>
+          </div>
+        </section>
+      </article>
+
+      <footer class="footer">EtherCAT 学习主线：先看数据路径，再看状态机；先通 PDO，再接 CiA402；先 FreeRun，再做 DC。</footer>
+    </main>
+  </div>
+
+  <script>
+    (() => {
+      const sections = [...document.querySelectorAll('section[id]')];
+      const navLinks = [...document.querySelectorAll('#sideNav a')];
+      const progressBar = document.getElementById('progressBar');
+      const progressText = document.getElementById('progressText');
+
+      function updateScroll() {
+        const max = document.documentElement.scrollHeight - window.innerHeight;
+        const percent = max > 0 ? Math.min(100, Math.round(window.scrollY / max * 100)) : 100;
+        progressBar.style.width = percent + '%';
+        progressText.textContent = percent + '%';
+        let current = sections[0].id;
+        for (const section of sections) {
+          if (section.getBoundingClientRect().top <= 110) current = section.id;
+        }
+        navLinks.forEach(a => a.classList.toggle('active', a.getAttribute('href') === '#' + current));
+      }
+      window.addEventListener('scroll', updateScroll, { passive: true });
+      updateScroll();
+
+      document.getElementById('mobileSelect').addEventListener('change', (e) => {
+        document.getElementById(e.target.value).scrollIntoView();
+      });
+
+      document.querySelectorAll('.frame').forEach(frame => {
+        const inspector = document.getElementById(frame.dataset.inspector);
+        frame.querySelectorAll('.frame-part').forEach(part => {
+          part.addEventListener('click', () => {
+            inspector.innerHTML = '<strong>' + part.dataset.title + '</strong><br><span class="muted">' + part.dataset.info + '</span>';
+          });
+        });
+      });
+
+      document.querySelectorAll('.tabs').forEach(tabs => {
+        const buttons = tabs.querySelectorAll('.tab-btn');
+        const panels = tabs.querySelectorAll('.tab-panel');
+        buttons.forEach(button => button.addEventListener('click', () => {
+          buttons.forEach(b => b.setAttribute('aria-selected', 'false'));
+          panels.forEach(p => p.classList.remove('active'));
+          button.setAttribute('aria-selected', 'true');
+          document.getElementById(button.dataset.tab).classList.add('active');
+        }));
+      });
+
+      const startAddr = document.getElementById('startAddr');
+      const mapLength = document.getElementById('mapLength');
+      const logicalMap = document.getElementById('logicalMap');
+      function drawMap() {
+        const start = Number(startAddr.value);
+        const length = Number(mapLength.value);
+        document.getElementById('startValue').textContent = start;
+        document.getElementById('lengthValue').textContent = length;
+        logicalMap.innerHTML = '';
+        for (let i = 0; i < 16; i++) {
+          const cell = document.createElement('div');
+          const hit = i >= start && i < start + length;
+          cell.className = 'byte' + (hit ? ' hit' : '');
+          cell.innerHTML = '<span>Byte ' + i + '<small>' + (hit ? 'Slave 1' : '未映射') + '</small></span>';
+          logicalMap.appendChild(cell);
+        }
+        document.getElementById('mapResult').textContent = '逻辑 Byte ' + start + '～' + (start + length - 1) + ' → Slave 1 的本地 Process RAM。';
+      }
+      startAddr.addEventListener('input', drawMap);
+      mapLength.addEventListener('input', drawMap);
+      drawMap();
+
+      const stateNames = ['INIT', 'PREOP', 'SAFEOP', 'OP'];
+      const stateMessages = [
+        '当前 INIT：主站先扫描 ESC，分配 Station Address，并检查身份信息。',
+        '当前 PREOP：Mailbox 已开放，可以使用 CoE/SDO 配置对象和 PDO 映射。',
+        '当前 SAFEOP：输入 PDO 可以发送给主站，但来自主站的输出还不能驱动功率级。',
+        '当前 OP：输入/输出 PDO 均有效；CiA402 仍需单独完成电机使能。'
+      ];
+      let stateIndex = 0;
+      const stateMessage = document.getElementById('stateMessage');
+      function renderState() {
+        document.querySelectorAll('.state').forEach((s, i) => s.classList.toggle('active', i === stateIndex));
+        stateMessage.className = 'callout';
+        stateMessage.textContent = stateMessages[stateIndex];
+      }
+      document.getElementById('stateNext').addEventListener('click', () => { stateIndex = Math.min(3, stateIndex + 1); renderState(); });
+      document.getElementById('stateReset').addEventListener('click', () => { stateIndex = 0; renderState(); });
+      document.getElementById('stateFault').addEventListener('click', () => {
+        stateMessage.className = 'callout warn';
+        stateMessage.innerHTML = '<strong>AL Status Code：Invalid SM Configuration</strong><br>主站请求更高状态被拒绝。此时应读取状态码并核对 SM 地址、长度、方向与 ESI，而不是反复强制请求 OP。';
+      });
+
+      document.querySelectorAll('.quiz-q').forEach(question => {
+        const correct = Number(question.dataset.answer);
+        const buttons = [...question.querySelectorAll('.answer')];
+        const feedback = question.querySelector('.feedback');
+        buttons.forEach((button, index) => button.addEventListener('click', () => {
+          buttons.forEach(b => b.classList.remove('correct', 'wrong'));
+          if (index === correct) {
+            button.classList.add('correct');
+            feedback.textContent = '正确。' + question.dataset.explain;
+          } else {
+            button.classList.add('wrong');
+            buttons[correct].classList.add('correct');
+            feedback.textContent = '再看一下：' + question.dataset.explain;
+          }
+        }));
+      });
+    })();
+  </script>
+</body>
+</html>

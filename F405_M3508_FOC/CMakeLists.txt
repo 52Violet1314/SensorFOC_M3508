@@ -43,7 +43,7 @@ target_link_directories(${CMAKE_PROJECT_NAME} PRIVATE
 )
 
 # Collect all user sources recursively (new files are picked up automatically)
-file(GLOB_RECURSE USER_SOURCES CONFIGURE_DEPENDS
+file(GLOB_RECURSE USER_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/BSP/src/*.c"
     "${CMAKE_CURRENT_SOURCE_DIR}/FOC/src/*.c"
     "${CMAKE_CURRENT_SOURCE_DIR}/Task/src/*.c"

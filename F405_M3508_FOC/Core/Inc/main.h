@@ -53,7 +53,8 @@ extern "C" {
 void Error_Handler(void);
 
 /* USER CODE BEGIN EFP */
-
+extern float Encoder_Angle;
+extern float Encoder_Elec_Angle;   /* 电角度 rad, 编码器直接输出 */
 /* USER CODE END EFP */
 
 /* Private defines -----------------------------------------------------------*/

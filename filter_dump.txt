@@ -1,0 +1,924 @@
+ 107:     double   sum;
+ 108:     double   sumSq;
+ 109: } CurStat_t;
+ 110: 
+ 111: static CurStat_t st_ia, st_ib, st_ic, st_iq;
+ 112: static volatile uint8_t stat_ready = 0u;
+ 113: 
+ 114: static void CurStat_Update(CurStat_t *s, float x)
+ 115: {
+ 116:     if (s->cnt == 0u) { s->min = x; s->max = x; }
+ 117:     s->cnt++;
+ 118:     if (x < s->min) s->min = x;
+ 119:     if (x > s->max) s->max = x;
+ 120:     s->sum   += (double)x;
+ 121:     s->sumSq += (double)x * (double)x;
+ 122: }
+ 123: 
+ 124: static float CurStat_Mean(const CurStat_t *s) { return (float)(s->sum / (double)s->cnt); }
+ 125: 
+ 126: static float CurStat_Std(const CurStat_t *s)
+ 127: {
+-----
+ 109: } CurStat_t;
+ 110: 
+ 111: static CurStat_t st_ia, st_ib, st_ic, st_iq;
+ 112: static volatile uint8_t stat_ready = 0u;
+ 113: 
+ 114: static void CurStat_Update(CurStat_t *s, float x)
+ 115: {
+ 116:     if (s->cnt == 0u) { s->min = x; s->max = x; }
+ 117:     s->cnt++;
+ 118:     if (x < s->min) s->min = x;
+ 119:     if (x > s->max) s->max = x;
+ 120:     s->sum   += (double)x;
+ 121:     s->sumSq += (double)x * (double)x;
+ 122: }
+ 123: 
+ 124: static float CurStat_Mean(const CurStat_t *s) { return (float)(s->sum / (double)s->cnt); }
+ 125: 
+ 126: static float CurStat_Std(const CurStat_t *s)
+ 127: {
+ 128:     float mean = CurStat_Mean(s);
+ 129:     double var = s->sumSq / (double)s->cnt - (double)mean * (double)mean;
+-----
+ 112: static volatile uint8_t stat_ready = 0u;
+ 113: 
+ 114: static void CurStat_Update(CurStat_t *s, float x)
+ 115: {
+ 116:     if (s->cnt == 0u) { s->min = x; s->max = x; }
+ 117:     s->cnt++;
+ 118:     if (x < s->min) s->min = x;
+ 119:     if (x > s->max) s->max = x;
+ 120:     s->sum   += (double)x;
+ 121:     s->sumSq += (double)x * (double)x;
+ 122: }
+ 123: 
+ 124: static float CurStat_Mean(const CurStat_t *s) { return (float)(s->sum / (double)s->cnt); }
+ 125: 
+ 126: static float CurStat_Std(const CurStat_t *s)
+ 127: {
+ 128:     float mean = CurStat_Mean(s);
+ 129:     double var = s->sumSq / (double)s->cnt - (double)mean * (double)mean;
+ 130:     return (var > 0.0) ? (float)sqrt(var) : 0.0f;
+ 131: }
+ 132: 
+-----
+ 122: }
+ 123: 
+ 124: static float CurStat_Mean(const CurStat_t *s) { return (float)(s->sum / (double)s->cnt); }
+ 125: 
+ 126: static float CurStat_Std(const CurStat_t *s)
+ 127: {
+ 128:     float mean = CurStat_Mean(s);
+ 129:     double var = s->sumSq / (double)s->cnt - (double)mean * (double)mean;
+ 130:     return (var > 0.0) ? (float)sqrt(var) : 0.0f;
+ 131: }
+ 132: 
+ 133: /* 每窗口输出一行纯数字(逗号分隔), 适合串口绘图:
+ 134:    列序: IA(mean,min,max,pkpk,std), IB(...), IC(...), IQf(...) 共20列 */
+ 135: static void CurStat_PrintAll(void)
+ 136: {
+ 137:     CDC_Printf("%0.3f,%0.3f,%0.3f,%0.3f,%0.3f,%0.3f,%0.3f,%0.3f,%0.3f,%0.3f,%0.3f,%0.3f,%0.3f,%0.3f,%0.3f,%0.3f,%0.3f,%0.3f,%0.3f,%0.3f\r\n",
+ 138:         CurStat_Mean(&st_ia),  st_ia.min, st_ia.max, st_ia.max - st_ia.min, CurStat_Std(&st_ia),
+ 139:         CurStat_Mean(&st_ib),  st_ib.min, st_ib.max, st_ib.max - st_ib.min, CurStat_Std(&st_ib),
+ 140:         CurStat_Mean(&st_ic),  st_ic.min, st_ic.max, st_ic.max - st_ic.min, CurStat_Std(&st_ic),
+ 141:         CurStat_Mean(&st_iq),  st_iq.min, st_iq.max, st_iq.max - st_iq.min, CurStat_Std(&st_iq));
+ 142: }
+-----
+ 124: static float CurStat_Mean(const CurStat_t *s) { return (float)(s->sum / (double)s->cnt); }
+ 125: 
+ 126: static float CurStat_Std(const CurStat_t *s)
+ 127: {
+ 128:     float mean = CurStat_Mean(s);
+ 129:     double var = s->sumSq / (double)s->cnt - (double)mean * (double)mean;
+ 130:     return (var > 0.0) ? (float)sqrt(var) : 0.0f;
+ 131: }
+ 132: 
+ 133: /* 每窗口输出一行纯数字(逗号分隔), 适合串口绘图:
+ 134:    列序: IA(mean,min,max,pkpk,std), IB(...), IC(...), IQf(...) 共20列 */
+ 135: static void CurStat_PrintAll(void)
+ 136: {
+ 137:     CDC_Printf("%0.3f,%0.3f,%0.3f,%0.3f,%0.3f,%0.3f,%0.3f,%0.3f,%0.3f,%0.3f,%0.3f,%0.3f,%0.3f,%0.3f,%0.3f,%0.3f,%0.3f,%0.3f,%0.3f,%0.3f\r\n",
+ 138:         CurStat_Mean(&st_ia),  st_ia.min, st_ia.max, st_ia.max - st_ia.min, CurStat_Std(&st_ia),
+ 139:         CurStat_Mean(&st_ib),  st_ib.min, st_ib.max, st_ib.max - st_ib.min, CurStat_Std(&st_ib),
+ 140:         CurStat_Mean(&st_ic),  st_ic.min, st_ic.max, st_ic.max - st_ic.min, CurStat_Std(&st_ic),
+ 141:         CurStat_Mean(&st_iq),  st_iq.min, st_iq.max, st_iq.max - st_iq.min, CurStat_Std(&st_iq));
+ 142: }
+ 143: 
+ 144: static void CurStat_Reset(CurStat_t *s)
+-----
+ 126: static float CurStat_Std(const CurStat_t *s)
+ 127: {
+ 128:     float mean = CurStat_Mean(s);
+ 129:     double var = s->sumSq / (double)s->cnt - (double)mean * (double)mean;
+ 130:     return (var > 0.0) ? (float)sqrt(var) : 0.0f;
+ 131: }
+ 132: 
+ 133: /* 每窗口输出一行纯数字(逗号分隔), 适合串口绘图:
+ 134:    列序: IA(mean,min,max,pkpk,std), IB(...), IC(...), IQf(...) 共20列 */
+ 135: static void CurStat_PrintAll(void)
+ 136: {
+ 137:     CDC_Printf("%0.3f,%0.3f,%0.3f,%0.3f,%0.3f,%0.3f,%0.3f,%0.3f,%0.3f,%0.3f,%0.3f,%0.3f,%0.3f,%0.3f,%0.3f,%0.3f,%0.3f,%0.3f,%0.3f,%0.3f\r\n",
+ 138:         CurStat_Mean(&st_ia),  st_ia.min, st_ia.max, st_ia.max - st_ia.min, CurStat_Std(&st_ia),
+ 139:         CurStat_Mean(&st_ib),  st_ib.min, st_ib.max, st_ib.max - st_ib.min, CurStat_Std(&st_ib),
+ 140:         CurStat_Mean(&st_ic),  st_ic.min, st_ic.max, st_ic.max - st_ic.min, CurStat_Std(&st_ic),
+ 141:         CurStat_Mean(&st_iq),  st_iq.min, st_iq.max, st_iq.max - st_iq.min, CurStat_Std(&st_iq));
+ 142: }
+ 143: 
+ 144: static void CurStat_Reset(CurStat_t *s)
+ 145: {
+ 146:     s->cnt = 0u;
+-----
+ 133: /* 每窗口输出一行纯数字(逗号分隔), 适合串口绘图:
+ 134:    列序: IA(mean,min,max,pkpk,std), IB(...), IC(...), IQf(...) 共20列 */
+ 135: static void CurStat_PrintAll(void)
+ 136: {
+ 137:     CDC_Printf("%0.3f,%0.3f,%0.3f,%0.3f,%0.3f,%0.3f,%0.3f,%0.3f,%0.3f,%0.3f,%0.3f,%0.3f,%0.3f,%0.3f,%0.3f,%0.3f,%0.3f,%0.3f,%0.3f,%0.3f\r\n",
+ 138:         CurStat_Mean(&st_ia),  st_ia.min, st_ia.max, st_ia.max - st_ia.min, CurStat_Std(&st_ia),
+ 139:         CurStat_Mean(&st_ib),  st_ib.min, st_ib.max, st_ib.max - st_ib.min, CurStat_Std(&st_ib),
+ 140:         CurStat_Mean(&st_ic),  st_ic.min, st_ic.max, st_ic.max - st_ic.min, CurStat_Std(&st_ic),
+ 141:         CurStat_Mean(&st_iq),  st_iq.min, st_iq.max, st_iq.max - st_iq.min, CurStat_Std(&st_iq));
+ 142: }
+ 143: 
+ 144: static void CurStat_Reset(CurStat_t *s)
+ 145: {
+ 146:     s->cnt = 0u;
+ 147:     s->min = 0.0f;
+ 148:     s->max = 0.0f;
+ 149:     s->sum = 0.0;
+ 150:     s->sumSq = 0.0;
+ 151: }
+ 152: 
+ 153: int main(void) {
+-----
+ 136: {
+ 137:     CDC_Printf("%0.3f,%0.3f,%0.3f,%0.3f,%0.3f,%0.3f,%0.3f,%0.3f,%0.3f,%0.3f,%0.3f,%0.3f,%0.3f,%0.3f,%0.3f,%0.3f,%0.3f,%0.3f,%0.3f,%0.3f\r\n",
+ 138:         CurStat_Mean(&st_ia),  st_ia.min, st_ia.max, st_ia.max - st_ia.min, CurStat_Std(&st_ia),
+ 139:         CurStat_Mean(&st_ib),  st_ib.min, st_ib.max, st_ib.max - st_ib.min, CurStat_Std(&st_ib),
+ 140:         CurStat_Mean(&st_ic),  st_ic.min, st_ic.max, st_ic.max - st_ic.min, CurStat_Std(&st_ic),
+ 141:         CurStat_Mean(&st_iq),  st_iq.min, st_iq.max, st_iq.max - st_iq.min, CurStat_Std(&st_iq));
+ 142: }
+ 143: 
+ 144: static void CurStat_Reset(CurStat_t *s)
+ 145: {
+ 146:     s->cnt = 0u;
+ 147:     s->min = 0.0f;
+ 148:     s->max = 0.0f;
+ 149:     s->sum = 0.0;
+ 150:     s->sumSq = 0.0;
+ 151: }
+ 152: 
+ 153: int main(void) {
+ 154: /* USER CODE BEGIN 1 */
+ 155: 
+ 156: /* USER CODE END 1 */
+-----
+ 137:     CDC_Printf("%0.3f,%0.3f,%0.3f,%0.3f,%0.3f,%0.3f,%0.3f,%0.3f,%0.3f,%0.3f,%0.3f,%0.3f,%0.3f,%0.3f,%0.3f,%0.3f,%0.3f,%0.3f,%0.3f,%0.3f\r\n",
+ 138:         CurStat_Mean(&st_ia),  st_ia.min, st_ia.max, st_ia.max - st_ia.min, CurStat_Std(&st_ia),
+ 139:         CurStat_Mean(&st_ib),  st_ib.min, st_ib.max, st_ib.max - st_ib.min, CurStat_Std(&st_ib),
+ 140:         CurStat_Mean(&st_ic),  st_ic.min, st_ic.max, st_ic.max - st_ic.min, CurStat_Std(&st_ic),
+ 141:         CurStat_Mean(&st_iq),  st_iq.min, st_iq.max, st_iq.max - st_iq.min, CurStat_Std(&st_iq));
+ 142: }
+ 143: 
+ 144: static void CurStat_Reset(CurStat_t *s)
+ 145: {
+ 146:     s->cnt = 0u;
+ 147:     s->min = 0.0f;
+ 148:     s->max = 0.0f;
+ 149:     s->sum = 0.0;
+ 150:     s->sumSq = 0.0;
+ 151: }
+ 152: 
+ 153: int main(void) {
+ 154: /* USER CODE BEGIN 1 */
+ 155: 
+ 156: /* USER CODE END 1 */
+ 157: 
+-----
+ 138:         CurStat_Mean(&st_ia),  st_ia.min, st_ia.max, st_ia.max - st_ia.min, CurStat_Std(&st_ia),
+ 139:         CurStat_Mean(&st_ib),  st_ib.min, st_ib.max, st_ib.max - st_ib.min, CurStat_Std(&st_ib),
+ 140:         CurStat_Mean(&st_ic),  st_ic.min, st_ic.max, st_ic.max - st_ic.min, CurStat_Std(&st_ic),
+ 141:         CurStat_Mean(&st_iq),  st_iq.min, st_iq.max, st_iq.max - st_iq.min, CurStat_Std(&st_iq));
+ 142: }
+ 143: 
+ 144: static void CurStat_Reset(CurStat_t *s)
+ 145: {
+ 146:     s->cnt = 0u;
+ 147:     s->min = 0.0f;
+ 148:     s->max = 0.0f;
+ 149:     s->sum = 0.0;
+ 150:     s->sumSq = 0.0;
+ 151: }
+ 152: 
+ 153: int main(void) {
+ 154: /* USER CODE BEGIN 1 */
+ 155: 
+ 156: /* USER CODE END 1 */
+ 157: 
+ 158: /* MCU Configuration--------------------------------------------------------*/
+-----
+ 139:         CurStat_Mean(&st_ib),  st_ib.min, st_ib.max, st_ib.max - st_ib.min, CurStat_Std(&st_ib),
+ 140:         CurStat_Mean(&st_ic),  st_ic.min, st_ic.max, st_ic.max - st_ic.min, CurStat_Std(&st_ic),
+ 141:         CurStat_Mean(&st_iq),  st_iq.min, st_iq.max, st_iq.max - st_iq.min, CurStat_Std(&st_iq));
+ 142: }
+ 143: 
+ 144: static void CurStat_Reset(CurStat_t *s)
+ 145: {
+ 146:     s->cnt = 0u;
+ 147:     s->min = 0.0f;
+ 148:     s->max = 0.0f;
+ 149:     s->sum = 0.0;
+ 150:     s->sumSq = 0.0;
+ 151: }
+ 152: 
+ 153: int main(void) {
+ 154: /* USER CODE BEGIN 1 */
+ 155: 
+ 156: /* USER CODE END 1 */
+ 157: 
+ 158: /* MCU Configuration--------------------------------------------------------*/
+ 159: 
+-----
+ 142: }
+ 143: 
+ 144: static void CurStat_Reset(CurStat_t *s)
+ 145: {
+ 146:     s->cnt = 0u;
+ 147:     s->min = 0.0f;
+ 148:     s->max = 0.0f;
+ 149:     s->sum = 0.0;
+ 150:     s->sumSq = 0.0;
+ 151: }
+ 152: 
+ 153: int main(void) {
+ 154: /* USER CODE BEGIN 1 */
+ 155: 
+ 156: /* USER CODE END 1 */
+ 157: 
+ 158: /* MCU Configuration--------------------------------------------------------*/
+ 159: 
+ 160: /* Reset of all peripherals, Initializes the Flash interface and the Systick. */
+ 161: HAL_Init();
+ 162: /* USER CODE BEGIN Init */
+-----
+ 181: BSP_Timer_Init();
+ 182: /* 注入转换由 TIM1_CC4 触发, TIM1 计数已由 BSP_Timer_Init 启动(无输出) */
+ 183: HAL_ADCEx_InjectedStart_IT(&hadc1);
+ 184: HAL_ADCEx_InjectedStart_IT(&hadc2);
+ 185: HAL_ADCEx_InjectedStart_IT(&hadc3);
+ 186: BSP_Timer_PWM_Start();
+ 187: /* 开环 V/F 起转, 目标 100rpm (极对数 7) */
+ 188: /* 自动零点校准: 未使能门极 => 零电流, 等 ADC 中断累加出三相真实中点(约10ms) */
+ 189: while (adc_cal_done == 0u) { }
+ 190: /* 起转: 使能门极, 用编码器电角度初始化开环角(避免起步突跳) */
+ 191: HAL_GPIO_WritePin(EN_Gate_GPIO_Port, EN_Gate_Pin, GPIO_PIN_SET);
+ 192: VF_Init(Encoder_Elec_Angle);
+ 193: VF_SetTargetRPM(100.0f);
+ 194: #if USE_CMSIS_OS2 == 1
+ 195: /* USER CODE END 2 */
+ 196: 
+ 197: /* Init scheduler */
+ 198: osKernelInitialize();
+ 199: /* Call init function for freertos objects (in cmsis_os2.c) */
+ 200: MX_FREERTOS_Init();
+ 201: /* Start scheduler */
+-----
+ 182: /* 注入转换由 TIM1_CC4 触发, TIM1 计数已由 BSP_Timer_Init 启动(无输出) */
+ 183: HAL_ADCEx_InjectedStart_IT(&hadc1);
+ 184: HAL_ADCEx_InjectedStart_IT(&hadc2);
+ 185: HAL_ADCEx_InjectedStart_IT(&hadc3);
+ 186: BSP_Timer_PWM_Start();
+ 187: /* 开环 V/F 起转, 目标 100rpm (极对数 7) */
+ 188: /* 自动零点校准: 未使能门极 => 零电流, 等 ADC 中断累加出三相真实中点(约10ms) */
+ 189: while (adc_cal_done == 0u) { }
+ 190: /* 起转: 使能门极, 用编码器电角度初始化开环角(避免起步突跳) */
+ 191: HAL_GPIO_WritePin(EN_Gate_GPIO_Port, EN_Gate_Pin, GPIO_PIN_SET);
+ 192: VF_Init(Encoder_Elec_Angle);
+ 193: VF_SetTargetRPM(100.0f);
+ 194: #if USE_CMSIS_OS2 == 1
+ 195: /* USER CODE END 2 */
+ 196: 
+ 197: /* Init scheduler */
+ 198: osKernelInitialize();
+ 199: /* Call init function for freertos objects (in cmsis_os2.c) */
+ 200: MX_FREERTOS_Init();
+ 201: /* Start scheduler */
+ 202: osKernelStart();
+-----
+ 183: HAL_ADCEx_InjectedStart_IT(&hadc1);
+ 184: HAL_ADCEx_InjectedStart_IT(&hadc2);
+ 185: HAL_ADCEx_InjectedStart_IT(&hadc3);
+ 186: BSP_Timer_PWM_Start();
+ 187: /* 开环 V/F 起转, 目标 100rpm (极对数 7) */
+ 188: /* 自动零点校准: 未使能门极 => 零电流, 等 ADC 中断累加出三相真实中点(约10ms) */
+ 189: while (adc_cal_done == 0u) { }
+ 190: /* 起转: 使能门极, 用编码器电角度初始化开环角(避免起步突跳) */
+ 191: HAL_GPIO_WritePin(EN_Gate_GPIO_Port, EN_Gate_Pin, GPIO_PIN_SET);
+ 192: VF_Init(Encoder_Elec_Angle);
+ 193: VF_SetTargetRPM(100.0f);
+ 194: #if USE_CMSIS_OS2 == 1
+ 195: /* USER CODE END 2 */
+ 196: 
+ 197: /* Init scheduler */
+ 198: osKernelInitialize();
+ 199: /* Call init function for freertos objects (in cmsis_os2.c) */
+ 200: MX_FREERTOS_Init();
+ 201: /* Start scheduler */
+ 202: osKernelStart();
+ 203: /* We should never get here as control is now taken by the scheduler */
+-----
+ 227: if (stat_ready)
+ 228: {
+ 229:     CurStat_PrintAll();
+ 230:     CurStat_Reset(&st_ia); CurStat_Reset(&st_ib); CurStat_Reset(&st_ic); CurStat_Reset(&st_iq);
+ 231:     stat_ready = 0u;  /* 最后再允许 ISR 累加, 避免清零竞态导致 cnt=0 打印出 nan */
+ 232: }
+ 233: HAL_Delay(1);
+ 234: /* USER CODE END WHILE */
+ 235: 
+ 236: /* USER CODE BEGIN 3 */
+ 237: }
+ 238: /* USER CODE END 3 */
+ 239: }
+ 240: /**
+ 241:   *
+ 242:   * @brief System Clock Configuration
+ 243:   * @retval None
+ 244:   */
+ 245: void SystemClock_Config(void) {
+ 246: RCC_OscInitTypeDef RCC_OscInitStruct =  {
+ 247: 0};
+-----
+ 228: {
+ 229:     CurStat_PrintAll();
+ 230:     CurStat_Reset(&st_ia); CurStat_Reset(&st_ib); CurStat_Reset(&st_ic); CurStat_Reset(&st_iq);
+ 231:     stat_ready = 0u;  /* 最后再允许 ISR 累加, 避免清零竞态导致 cnt=0 打印出 nan */
+ 232: }
+ 233: HAL_Delay(1);
+ 234: /* USER CODE END WHILE */
+ 235: 
+ 236: /* USER CODE BEGIN 3 */
+ 237: }
+ 238: /* USER CODE END 3 */
+ 239: }
+ 240: /**
+ 241:   *
+ 242:   * @brief System Clock Configuration
+ 243:   * @retval None
+ 244:   */
+ 245: void SystemClock_Config(void) {
+ 246: RCC_OscInitTypeDef RCC_OscInitStruct =  {
+ 247: 0};
+ 248: RCC_ClkInitTypeDef RCC_ClkInitStruct =  {
+-----
+ 300: float lpf;
+ 301: }
+ 302: CurFilter_t;
+ 303: static CurFilter_t ia_flt =  {
+ 304: {
+ 305: 0.0f}
+ 306: , 0u, 0.0f};
+ 307: static CurFilter_t ib_flt =  {
+ 308: {
+ 309: 0.0f}
+ 310: , 0u, 0.0f};
+ 311: static CurFilter_t id_flt =  {
+ 312: {
+ 313: 0.0f}
+ 314: , 0u, 0.0f};
+ 315: static CurFilter_t iq_flt =  {
+ 316: {
+ 317: 0.0f}
+ 318: , 0u, 0.0f};
+ 319: static float CurFilter_Step(CurFilter_t *f, float in) {
+ 320: f->buf[f->idx] = in;
+-----
+ 301: }
+ 302: CurFilter_t;
+ 303: static CurFilter_t ia_flt =  {
+ 304: {
+ 305: 0.0f}
+ 306: , 0u, 0.0f};
+ 307: static CurFilter_t ib_flt =  {
+ 308: {
+ 309: 0.0f}
+ 310: , 0u, 0.0f};
+ 311: static CurFilter_t id_flt =  {
+ 312: {
+ 313: 0.0f}
+ 314: , 0u, 0.0f};
+ 315: static CurFilter_t iq_flt =  {
+ 316: {
+ 317: 0.0f}
+ 318: , 0u, 0.0f};
+ 319: static float CurFilter_Step(CurFilter_t *f, float in) {
+ 320: f->buf[f->idx] = in;
+ 321: f->idx = (uint8_t)((f->idx + 1u) % CUR_MA_WIN);
+-----
+ 305: 0.0f}
+ 306: , 0u, 0.0f};
+ 307: static CurFilter_t ib_flt =  {
+ 308: {
+ 309: 0.0f}
+ 310: , 0u, 0.0f};
+ 311: static CurFilter_t id_flt =  {
+ 312: {
+ 313: 0.0f}
+ 314: , 0u, 0.0f};
+ 315: static CurFilter_t iq_flt =  {
+ 316: {
+ 317: 0.0f}
+ 318: , 0u, 0.0f};
+ 319: static float CurFilter_Step(CurFilter_t *f, float in) {
+ 320: f->buf[f->idx] = in;
+ 321: f->idx = (uint8_t)((f->idx + 1u) % CUR_MA_WIN);
+ 322: /* 5点中值滤波: 剔除单点野点/毛刺, 对尖峰最有效 */
+ 323: float s[CUR_MA_WIN];
+ 324: for (uint8_t i = 0u; i < CUR_MA_WIN; i++) s[i] = f->buf[i];
+ 325: for (uint8_t i = 1u; i < CUR_MA_WIN; i++)     {
+-----
+ 309: 0.0f}
+ 310: , 0u, 0.0f};
+ 311: static CurFilter_t id_flt =  {
+ 312: {
+ 313: 0.0f}
+ 314: , 0u, 0.0f};
+ 315: static CurFilter_t iq_flt =  {
+ 316: {
+ 317: 0.0f}
+ 318: , 0u, 0.0f};
+ 319: static float CurFilter_Step(CurFilter_t *f, float in) {
+ 320: f->buf[f->idx] = in;
+ 321: f->idx = (uint8_t)((f->idx + 1u) % CUR_MA_WIN);
+ 322: /* 5点中值滤波: 剔除单点野点/毛刺, 对尖峰最有效 */
+ 323: float s[CUR_MA_WIN];
+ 324: for (uint8_t i = 0u; i < CUR_MA_WIN; i++) s[i] = f->buf[i];
+ 325: for (uint8_t i = 1u; i < CUR_MA_WIN; i++)     {
+ 326: float key = s[i];
+ 327: uint8_t j = i;
+ 328: while (j > 0u && s[j - 1u] > key)  {
+ 329: s[j] = s[j - 1u];
+-----
+ 313: 0.0f}
+ 314: , 0u, 0.0f};
+ 315: static CurFilter_t iq_flt =  {
+ 316: {
+ 317: 0.0f}
+ 318: , 0u, 0.0f};
+ 319: static float CurFilter_Step(CurFilter_t *f, float in) {
+ 320: f->buf[f->idx] = in;
+ 321: f->idx = (uint8_t)((f->idx + 1u) % CUR_MA_WIN);
+ 322: /* 5点中值滤波: 剔除单点野点/毛刺, 对尖峰最有效 */
+ 323: float s[CUR_MA_WIN];
+ 324: for (uint8_t i = 0u; i < CUR_MA_WIN; i++) s[i] = f->buf[i];
+ 325: for (uint8_t i = 1u; i < CUR_MA_WIN; i++)     {
+ 326: float key = s[i];
+ 327: uint8_t j = i;
+ 328: while (j > 0u && s[j - 1u] > key)  {
+ 329: s[j] = s[j - 1u];
+ 330: j--;
+ 331: }
+ 332: s[j] = key;
+ 333: }
+-----
+ 317: 0.0f}
+ 318: , 0u, 0.0f};
+ 319: static float CurFilter_Step(CurFilter_t *f, float in) {
+ 320: f->buf[f->idx] = in;
+ 321: f->idx = (uint8_t)((f->idx + 1u) % CUR_MA_WIN);
+ 322: /* 5点中值滤波: 剔除单点野点/毛刺, 对尖峰最有效 */
+ 323: float s[CUR_MA_WIN];
+ 324: for (uint8_t i = 0u; i < CUR_MA_WIN; i++) s[i] = f->buf[i];
+ 325: for (uint8_t i = 1u; i < CUR_MA_WIN; i++)     {
+ 326: float key = s[i];
+ 327: uint8_t j = i;
+ 328: while (j > 0u && s[j - 1u] > key)  {
+ 329: s[j] = s[j - 1u];
+ 330: j--;
+ 331: }
+ 332: s[j] = key;
+ 333: }
+ 334: float med = s[CUR_MA_WIN / 2u];
+ 335: /* 一阶低通平滑剩余波动/震荡 */
+ 336: f->lpf += CUR_LPF_ALPHA * (med - f->lpf);
+ 337: return f->lpf;
+-----
+ 337: return f->lpf;
+ 338: }
+ 339: void HAL_ADCEx_InjectedConvCpltCallback(ADC_HandleTypeDef *hadc) {
+ 340: if(hadc->Instance == ADC1)   {
+ 341: ADC_Current[0] = HAL_ADCEx_InjectedGetValue(hadc, ADC_INJECTED_RANK_1);
+ 342: /* IA   */
+ 343: ADC_Voltage[0] = HAL_ADCEx_InjectedGetValue(hadc, ADC_INJECTED_RANK_2);
+ 344: /* VA   */
+ 345: Encoder_Sin    = HAL_ADCEx_InjectedGetValue(hadc, ADC_INJECTED_RANK_3);
+ 346: /* SIN */
+ 347: ADC_Power      = HAL_ADCEx_InjectedGetValue(hadc, ADC_INJECTED_RANK_4);
+ 348: /* VDC  */
+ 349: Voltage[0] = ADC_Voltage[0] * ADC_VREF / 4095.0f;
+ 350: /* 上电零点校准: 未使能门极时电流为 0, 累加求三相真实中点 */
+ 351:     if (adc_cal_done == 0u)
+ 352:     {
+ 353:         cal_sum[0] += (uint32_t)ADC_Current[0];
+ 354:         cal_sum[1] += (uint32_t)ADC_Current[1];
+ 355:         cal_sum[2] += (uint32_t)ADC_Current[2];
+ 356:         cal_n++;
+ 357:         if (cal_n >= ADC_CAL_WIN)
+-----
+ 339: void HAL_ADCEx_InjectedConvCpltCallback(ADC_HandleTypeDef *hadc) {
+ 340: if(hadc->Instance == ADC1)   {
+ 341: ADC_Current[0] = HAL_ADCEx_InjectedGetValue(hadc, ADC_INJECTED_RANK_1);
+ 342: /* IA   */
+ 343: ADC_Voltage[0] = HAL_ADCEx_InjectedGetValue(hadc, ADC_INJECTED_RANK_2);
+ 344: /* VA   */
+ 345: Encoder_Sin    = HAL_ADCEx_InjectedGetValue(hadc, ADC_INJECTED_RANK_3);
+ 346: /* SIN */
+ 347: ADC_Power      = HAL_ADCEx_InjectedGetValue(hadc, ADC_INJECTED_RANK_4);
+ 348: /* VDC  */
+ 349: Voltage[0] = ADC_Voltage[0] * ADC_VREF / 4095.0f;
+ 350: /* 上电零点校准: 未使能门极时电流为 0, 累加求三相真实中点 */
+ 351:     if (adc_cal_done == 0u)
+ 352:     {
+ 353:         cal_sum[0] += (uint32_t)ADC_Current[0];
+ 354:         cal_sum[1] += (uint32_t)ADC_Current[1];
+ 355:         cal_sum[2] += (uint32_t)ADC_Current[2];
+ 356:         cal_n++;
+ 357:         if (cal_n >= ADC_CAL_WIN)
+ 358:         {
+ 359:             csa_vmid[0] = (float)cal_sum[0] / (float)cal_n;
+-----
+ 341: ADC_Current[0] = HAL_ADCEx_InjectedGetValue(hadc, ADC_INJECTED_RANK_1);
+ 342: /* IA   */
+ 343: ADC_Voltage[0] = HAL_ADCEx_InjectedGetValue(hadc, ADC_INJECTED_RANK_2);
+ 344: /* VA   */
+ 345: Encoder_Sin    = HAL_ADCEx_InjectedGetValue(hadc, ADC_INJECTED_RANK_3);
+ 346: /* SIN */
+ 347: ADC_Power      = HAL_ADCEx_InjectedGetValue(hadc, ADC_INJECTED_RANK_4);
+ 348: /* VDC  */
+ 349: Voltage[0] = ADC_Voltage[0] * ADC_VREF / 4095.0f;
+ 350: /* 上电零点校准: 未使能门极时电流为 0, 累加求三相真实中点 */
+ 351:     if (adc_cal_done == 0u)
+ 352:     {
+ 353:         cal_sum[0] += (uint32_t)ADC_Current[0];
+ 354:         cal_sum[1] += (uint32_t)ADC_Current[1];
+ 355:         cal_sum[2] += (uint32_t)ADC_Current[2];
+ 356:         cal_n++;
+ 357:         if (cal_n >= ADC_CAL_WIN)
+ 358:         {
+ 359:             csa_vmid[0] = (float)cal_sum[0] / (float)cal_n;
+ 360:             csa_vmid[1] = (float)cal_sum[1] / (float)cal_n;
+ 361:             csa_vmid[2] = (float)cal_sum[2] / (float)cal_n;
+-----
+ 343: ADC_Voltage[0] = HAL_ADCEx_InjectedGetValue(hadc, ADC_INJECTED_RANK_2);
+ 344: /* VA   */
+ 345: Encoder_Sin    = HAL_ADCEx_InjectedGetValue(hadc, ADC_INJECTED_RANK_3);
+ 346: /* SIN */
+ 347: ADC_Power      = HAL_ADCEx_InjectedGetValue(hadc, ADC_INJECTED_RANK_4);
+ 348: /* VDC  */
+ 349: Voltage[0] = ADC_Voltage[0] * ADC_VREF / 4095.0f;
+ 350: /* 上电零点校准: 未使能门极时电流为 0, 累加求三相真实中点 */
+ 351:     if (adc_cal_done == 0u)
+ 352:     {
+ 353:         cal_sum[0] += (uint32_t)ADC_Current[0];
+ 354:         cal_sum[1] += (uint32_t)ADC_Current[1];
+ 355:         cal_sum[2] += (uint32_t)ADC_Current[2];
+ 356:         cal_n++;
+ 357:         if (cal_n >= ADC_CAL_WIN)
+ 358:         {
+ 359:             csa_vmid[0] = (float)cal_sum[0] / (float)cal_n;
+ 360:             csa_vmid[1] = (float)cal_sum[1] / (float)cal_n;
+ 361:             csa_vmid[2] = (float)cal_sum[2] / (float)cal_n;
+ 362:             adc_cal_done = 1u;
+ 363:         }
+-----
+ 345: Encoder_Sin    = HAL_ADCEx_InjectedGetValue(hadc, ADC_INJECTED_RANK_3);
+ 346: /* SIN */
+ 347: ADC_Power      = HAL_ADCEx_InjectedGetValue(hadc, ADC_INJECTED_RANK_4);
+ 348: /* VDC  */
+ 349: Voltage[0] = ADC_Voltage[0] * ADC_VREF / 4095.0f;
+ 350: /* 上电零点校准: 未使能门极时电流为 0, 累加求三相真实中点 */
+ 351:     if (adc_cal_done == 0u)
+ 352:     {
+ 353:         cal_sum[0] += (uint32_t)ADC_Current[0];
+ 354:         cal_sum[1] += (uint32_t)ADC_Current[1];
+ 355:         cal_sum[2] += (uint32_t)ADC_Current[2];
+ 356:         cal_n++;
+ 357:         if (cal_n >= ADC_CAL_WIN)
+ 358:         {
+ 359:             csa_vmid[0] = (float)cal_sum[0] / (float)cal_n;
+ 360:             csa_vmid[1] = (float)cal_sum[1] / (float)cal_n;
+ 361:             csa_vmid[2] = (float)cal_sum[2] / (float)cal_n;
+ 362:             adc_cal_done = 1u;
+ 363:         }
+ 364:     }
+ 365:     /* 三相电流换算 + Clarke: 在采样中断里完成(ADC2/3 先于 ADC1 完成, 均为同一触发拍) */
+-----
+ 371:     if (stat_ready == 0u)
+ 372:     {
+ 373:         CurStat_Update(&st_ia, Current[0]);
+ 374:         CurStat_Update(&st_ib, Current[1]);
+ 375:         CurStat_Update(&st_ic, Current[2]);
+ 376:         if (st_ia.cnt >= ADC_STAT_WIN) stat_ready = 1u;
+ 377:     }
+ 378: 
+ 379: ia_filt = CurFilter_Step(&ia_flt, ialpha);
+ 380: /* 5点均值 + 一阶低通 */
+ 381: ib_filt = CurFilter_Step(&ib_flt, ibeta);
+ 382: /* 电流幅值(≈转矩大小, 稳态为直流) + 低通 */
+ 383: cur_mag = sqrtf(ia_filt * ia_filt + ib_filt * ib_filt);
+ 384: cur_mag_filt += CUR_MAG_ALPHA * (cur_mag - cur_mag_filt);
+ 385: Power      = ADC_Power * ADC_VREF / 4095.0f * VDC_DIVIDER;
+ 386: /* 编码器电角度(ADC2 的 COS 为上一拍, 滞后 100us, 可忽略) */
+ 387: Encoder_Update(Encoder_Sin, Encoder_Cos);
+ 388: Encoder_Angle      = Encoder_GetMechAngle();
+ 389: Encoder_Elec_Angle = Encoder_GetElecAngle();
+ 390: /* Park: 用编码器电角度把 αβ 电流转到 dq(转子定向), dq 再做同样的 5点均值+低通 */
+ 391: ParkTransformer(ialpha, ibeta, Encoder_Elec_Angle, &iq, &id);
+-----
+ 372:     {
+ 373:         CurStat_Update(&st_ia, Current[0]);
+ 374:         CurStat_Update(&st_ib, Current[1]);
+ 375:         CurStat_Update(&st_ic, Current[2]);
+ 376:         if (st_ia.cnt >= ADC_STAT_WIN) stat_ready = 1u;
+ 377:     }
+ 378: 
+ 379: ia_filt = CurFilter_Step(&ia_flt, ialpha);
+ 380: /* 5点均值 + 一阶低通 */
+ 381: ib_filt = CurFilter_Step(&ib_flt, ibeta);
+ 382: /* 电流幅值(≈转矩大小, 稳态为直流) + 低通 */
+ 383: cur_mag = sqrtf(ia_filt * ia_filt + ib_filt * ib_filt);
+ 384: cur_mag_filt += CUR_MAG_ALPHA * (cur_mag - cur_mag_filt);
+ 385: Power      = ADC_Power * ADC_VREF / 4095.0f * VDC_DIVIDER;
+ 386: /* 编码器电角度(ADC2 的 COS 为上一拍, 滞后 100us, 可忽略) */
+ 387: Encoder_Update(Encoder_Sin, Encoder_Cos);
+ 388: Encoder_Angle      = Encoder_GetMechAngle();
+ 389: Encoder_Elec_Angle = Encoder_GetElecAngle();
+ 390: /* Park: 用编码器电角度把 αβ 电流转到 dq(转子定向), dq 再做同样的 5点均值+低通 */
+ 391: ParkTransformer(ialpha, ibeta, Encoder_Elec_Angle, &iq, &id);
+ 392: id_filt = CurFilter_Step(&id_flt, id);
+-----
+ 373:         CurStat_Update(&st_ia, Current[0]);
+ 374:         CurStat_Update(&st_ib, Current[1]);
+ 375:         CurStat_Update(&st_ic, Current[2]);
+ 376:         if (st_ia.cnt >= ADC_STAT_WIN) stat_ready = 1u;
+ 377:     }
+ 378: 
+ 379: ia_filt = CurFilter_Step(&ia_flt, ialpha);
+ 380: /* 5点均值 + 一阶低通 */
+ 381: ib_filt = CurFilter_Step(&ib_flt, ibeta);
+ 382: /* 电流幅值(≈转矩大小, 稳态为直流) + 低通 */
+ 383: cur_mag = sqrtf(ia_filt * ia_filt + ib_filt * ib_filt);
+ 384: cur_mag_filt += CUR_MAG_ALPHA * (cur_mag - cur_mag_filt);
+ 385: Power      = ADC_Power * ADC_VREF / 4095.0f * VDC_DIVIDER;
+ 386: /* 编码器电角度(ADC2 的 COS 为上一拍, 滞后 100us, 可忽略) */
+ 387: Encoder_Update(Encoder_Sin, Encoder_Cos);
+ 388: Encoder_Angle      = Encoder_GetMechAngle();
+ 389: Encoder_Elec_Angle = Encoder_GetElecAngle();
+ 390: /* Park: 用编码器电角度把 αβ 电流转到 dq(转子定向), dq 再做同样的 5点均值+低通 */
+ 391: ParkTransformer(ialpha, ibeta, Encoder_Elec_Angle, &iq, &id);
+ 392: id_filt = CurFilter_Step(&id_flt, id);
+ 393: iq_filt = CurFilter_Step(&iq_flt, iq);
+-----
+ 377:     }
+ 378: 
+ 379: ia_filt = CurFilter_Step(&ia_flt, ialpha);
+ 380: /* 5点均值 + 一阶低通 */
+ 381: ib_filt = CurFilter_Step(&ib_flt, ibeta);
+ 382: /* 电流幅值(≈转矩大小, 稳态为直流) + 低通 */
+ 383: cur_mag = sqrtf(ia_filt * ia_filt + ib_filt * ib_filt);
+ 384: cur_mag_filt += CUR_MAG_ALPHA * (cur_mag - cur_mag_filt);
+ 385: Power      = ADC_Power * ADC_VREF / 4095.0f * VDC_DIVIDER;
+ 386: /* 编码器电角度(ADC2 的 COS 为上一拍, 滞后 100us, 可忽略) */
+ 387: Encoder_Update(Encoder_Sin, Encoder_Cos);
+ 388: Encoder_Angle      = Encoder_GetMechAngle();
+ 389: Encoder_Elec_Angle = Encoder_GetElecAngle();
+ 390: /* Park: 用编码器电角度把 αβ 电流转到 dq(转子定向), dq 再做同样的 5点均值+低通 */
+ 391: ParkTransformer(ialpha, ibeta, Encoder_Elec_Angle, &iq, &id);
+ 392: id_filt = CurFilter_Step(&id_flt, id);
+ 393: iq_filt = CurFilter_Step(&iq_flt, iq);
+ 394:     if (stat_ready == 0u) CurStat_Update(&st_iq, iq_filt);
+ 395: VF_Tick(Power, Encoder_Elec_Angle);
+ 396: /* 闭环: 磁场跟随编码器电角度 */
+ 397: 
+-----
+ 379: ia_filt = CurFilter_Step(&ia_flt, ialpha);
+ 380: /* 5点均值 + 一阶低通 */
+ 381: ib_filt = CurFilter_Step(&ib_flt, ibeta);
+ 382: /* 电流幅值(≈转矩大小, 稳态为直流) + 低通 */
+ 383: cur_mag = sqrtf(ia_filt * ia_filt + ib_filt * ib_filt);
+ 384: cur_mag_filt += CUR_MAG_ALPHA * (cur_mag - cur_mag_filt);
+ 385: Power      = ADC_Power * ADC_VREF / 4095.0f * VDC_DIVIDER;
+ 386: /* 编码器电角度(ADC2 的 COS 为上一拍, 滞后 100us, 可忽略) */
+ 387: Encoder_Update(Encoder_Sin, Encoder_Cos);
+ 388: Encoder_Angle      = Encoder_GetMechAngle();
+ 389: Encoder_Elec_Angle = Encoder_GetElecAngle();
+ 390: /* Park: 用编码器电角度把 αβ 电流转到 dq(转子定向), dq 再做同样的 5点均值+低通 */
+ 391: ParkTransformer(ialpha, ibeta, Encoder_Elec_Angle, &iq, &id);
+ 392: id_filt = CurFilter_Step(&id_flt, id);
+ 393: iq_filt = CurFilter_Step(&iq_flt, iq);
+ 394:     if (stat_ready == 0u) CurStat_Update(&st_iq, iq_filt);
+ 395: VF_Tick(Power, Encoder_Elec_Angle);
+ 396: /* 闭环: 磁场跟随编码器电角度 */
+ 397: 
+ 398: /* 诊断: 绿 LED 0.5s 翻转一次, 证明此中断在运行 */
+ 399: if (HAL_GetTick() - Heartbeat_ms >= 500u)     {
+-----
+ 390: /* Park: 用编码器电角度把 αβ 电流转到 dq(转子定向), dq 再做同样的 5点均值+低通 */
+ 391: ParkTransformer(ialpha, ibeta, Encoder_Elec_Angle, &iq, &id);
+ 392: id_filt = CurFilter_Step(&id_flt, id);
+ 393: iq_filt = CurFilter_Step(&iq_flt, iq);
+ 394:     if (stat_ready == 0u) CurStat_Update(&st_iq, iq_filt);
+ 395: VF_Tick(Power, Encoder_Elec_Angle);
+ 396: /* 闭环: 磁场跟随编码器电角度 */
+ 397: 
+ 398: /* 诊断: 绿 LED 0.5s 翻转一次, 证明此中断在运行 */
+ 399: if (HAL_GetTick() - Heartbeat_ms >= 500u)     {
+ 400: HAL_GPIO_TogglePin(LED_Green_GPIO_Port, LED_Green_Pin);
+ 401: Heartbeat_ms = HAL_GetTick();
+ 402: }
+ 403: /* 诊断: 红 LED 亮 = 驱动芯片 FAULT 拉低 */
+ 404: if (HAL_GPIO_ReadPin(FAULT_GPIO_Port, FAULT_Pin) == GPIO_PIN_RESET)     {
+ 405: HAL_GPIO_WritePin(LED_Red_GPIO_Port, LED_Red_Pin, GPIO_PIN_SET);
+ 406: }
+ 407: else     {
+ 408: HAL_GPIO_WritePin(LED_Red_GPIO_Port, LED_Red_Pin, GPIO_PIN_RESET);
+ 409: }
+ 410: }
+-----
+ 391: ParkTransformer(ialpha, ibeta, Encoder_Elec_Angle, &iq, &id);
+ 392: id_filt = CurFilter_Step(&id_flt, id);
+ 393: iq_filt = CurFilter_Step(&iq_flt, iq);
+ 394:     if (stat_ready == 0u) CurStat_Update(&st_iq, iq_filt);
+ 395: VF_Tick(Power, Encoder_Elec_Angle);
+ 396: /* 闭环: 磁场跟随编码器电角度 */
+ 397: 
+ 398: /* 诊断: 绿 LED 0.5s 翻转一次, 证明此中断在运行 */
+ 399: if (HAL_GetTick() - Heartbeat_ms >= 500u)     {
+ 400: HAL_GPIO_TogglePin(LED_Green_GPIO_Port, LED_Green_Pin);
+ 401: Heartbeat_ms = HAL_GetTick();
+ 402: }
+ 403: /* 诊断: 红 LED 亮 = 驱动芯片 FAULT 拉低 */
+ 404: if (HAL_GPIO_ReadPin(FAULT_GPIO_Port, FAULT_Pin) == GPIO_PIN_RESET)     {
+ 405: HAL_GPIO_WritePin(LED_Red_GPIO_Port, LED_Red_Pin, GPIO_PIN_SET);
+ 406: }
+ 407: else     {
+ 408: HAL_GPIO_WritePin(LED_Red_GPIO_Port, LED_Red_Pin, GPIO_PIN_RESET);
+ 409: }
+ 410: }
+ 411: if(hadc->Instance == ADC2)   {
+-----
+ 392: id_filt = CurFilter_Step(&id_flt, id);
+ 393: iq_filt = CurFilter_Step(&iq_flt, iq);
+ 394:     if (stat_ready == 0u) CurStat_Update(&st_iq, iq_filt);
+ 395: VF_Tick(Power, Encoder_Elec_Angle);
+ 396: /* 闭环: 磁场跟随编码器电角度 */
+ 397: 
+ 398: /* 诊断: 绿 LED 0.5s 翻转一次, 证明此中断在运行 */
+ 399: if (HAL_GetTick() - Heartbeat_ms >= 500u)     {
+ 400: HAL_GPIO_TogglePin(LED_Green_GPIO_Port, LED_Green_Pin);
+ 401: Heartbeat_ms = HAL_GetTick();
+ 402: }
+ 403: /* 诊断: 红 LED 亮 = 驱动芯片 FAULT 拉低 */
+ 404: if (HAL_GPIO_ReadPin(FAULT_GPIO_Port, FAULT_Pin) == GPIO_PIN_RESET)     {
+ 405: HAL_GPIO_WritePin(LED_Red_GPIO_Port, LED_Red_Pin, GPIO_PIN_SET);
+ 406: }
+ 407: else     {
+ 408: HAL_GPIO_WritePin(LED_Red_GPIO_Port, LED_Red_Pin, GPIO_PIN_RESET);
+ 409: }
+ 410: }
+ 411: if(hadc->Instance == ADC2)   {
+ 412: ADC_Current[1] = HAL_ADCEx_InjectedGetValue(hadc, ADC_INJECTED_RANK_1);
+-----
+ 410: }
+ 411: if(hadc->Instance == ADC2)   {
+ 412: ADC_Current[1] = HAL_ADCEx_InjectedGetValue(hadc, ADC_INJECTED_RANK_1);
+ 413: /* IB   */
+ 414: ADC_Voltage[1] = HAL_ADCEx_InjectedGetValue(hadc, ADC_INJECTED_RANK_2);
+ 415: /* VB   */
+ 416: Encoder_Cos    = HAL_ADCEx_InjectedGetValue(hadc, ADC_INJECTED_RANK_3);
+ 417: /* COS */
+ 418: ADC_Temp       = HAL_ADCEx_InjectedGetValue(hadc, ADC_INJECTED_RANK_4);
+ 419: /* TEMP */
+ 420: Voltage[1] = ADC_Voltage[1] * ADC_VREF / 4095.0f;
+ 421: Temp       = ADC_Temp * ADC_VREF / 4095.0f;
+ 422: /* 温度通道电压, 换算公式待硬件确定 */
+ 423: }
+ 424: if(hadc->Instance == ADC3)   {
+ 425: ADC_Current[2] = HAL_ADCEx_InjectedGetValue(hadc, ADC_INJECTED_RANK_1);
+ 426: /* IC   */
+ 427: ADC_Voltage[2] = HAL_ADCEx_InjectedGetValue(hadc, ADC_INJECTED_RANK_2);
+ 428: /* VC   */
+ 429: Voltage[2] = ADC_Voltage[2] * ADC_VREF / 4095.0f;
+ 430: }
+-----
+ 412: ADC_Current[1] = HAL_ADCEx_InjectedGetValue(hadc, ADC_INJECTED_RANK_1);
+ 413: /* IB   */
+ 414: ADC_Voltage[1] = HAL_ADCEx_InjectedGetValue(hadc, ADC_INJECTED_RANK_2);
+ 415: /* VB   */
+ 416: Encoder_Cos    = HAL_ADCEx_InjectedGetValue(hadc, ADC_INJECTED_RANK_3);
+ 417: /* COS */
+ 418: ADC_Temp       = HAL_ADCEx_InjectedGetValue(hadc, ADC_INJECTED_RANK_4);
+ 419: /* TEMP */
+ 420: Voltage[1] = ADC_Voltage[1] * ADC_VREF / 4095.0f;
+ 421: Temp       = ADC_Temp * ADC_VREF / 4095.0f;
+ 422: /* 温度通道电压, 换算公式待硬件确定 */
+ 423: }
+ 424: if(hadc->Instance == ADC3)   {
+ 425: ADC_Current[2] = HAL_ADCEx_InjectedGetValue(hadc, ADC_INJECTED_RANK_1);
+ 426: /* IC   */
+ 427: ADC_Voltage[2] = HAL_ADCEx_InjectedGetValue(hadc, ADC_INJECTED_RANK_2);
+ 428: /* VC   */
+ 429: Voltage[2] = ADC_Voltage[2] * ADC_VREF / 4095.0f;
+ 430: }
+ 431: }
+ 432: /* USER CODE END 4 */
+-----
+ 414: ADC_Voltage[1] = HAL_ADCEx_InjectedGetValue(hadc, ADC_INJECTED_RANK_2);
+ 415: /* VB   */
+ 416: Encoder_Cos    = HAL_ADCEx_InjectedGetValue(hadc, ADC_INJECTED_RANK_3);
+ 417: /* COS */
+ 418: ADC_Temp       = HAL_ADCEx_InjectedGetValue(hadc, ADC_INJECTED_RANK_4);
+ 419: /* TEMP */
+ 420: Voltage[1] = ADC_Voltage[1] * ADC_VREF / 4095.0f;
+ 421: Temp       = ADC_Temp * ADC_VREF / 4095.0f;
+ 422: /* 温度通道电压, 换算公式待硬件确定 */
+ 423: }
+ 424: if(hadc->Instance == ADC3)   {
+ 425: ADC_Current[2] = HAL_ADCEx_InjectedGetValue(hadc, ADC_INJECTED_RANK_1);
+ 426: /* IC   */
+ 427: ADC_Voltage[2] = HAL_ADCEx_InjectedGetValue(hadc, ADC_INJECTED_RANK_2);
+ 428: /* VC   */
+ 429: Voltage[2] = ADC_Voltage[2] * ADC_VREF / 4095.0f;
+ 430: }
+ 431: }
+ 432: /* USER CODE END 4 */
+ 433: /**
+ 434:   *
+-----
+ 416: Encoder_Cos    = HAL_ADCEx_InjectedGetValue(hadc, ADC_INJECTED_RANK_3);
+ 417: /* COS */
+ 418: ADC_Temp       = HAL_ADCEx_InjectedGetValue(hadc, ADC_INJECTED_RANK_4);
+ 419: /* TEMP */
+ 420: Voltage[1] = ADC_Voltage[1] * ADC_VREF / 4095.0f;
+ 421: Temp       = ADC_Temp * ADC_VREF / 4095.0f;
+ 422: /* 温度通道电压, 换算公式待硬件确定 */
+ 423: }
+ 424: if(hadc->Instance == ADC3)   {
+ 425: ADC_Current[2] = HAL_ADCEx_InjectedGetValue(hadc, ADC_INJECTED_RANK_1);
+ 426: /* IC   */
+ 427: ADC_Voltage[2] = HAL_ADCEx_InjectedGetValue(hadc, ADC_INJECTED_RANK_2);
+ 428: /* VC   */
+ 429: Voltage[2] = ADC_Voltage[2] * ADC_VREF / 4095.0f;
+ 430: }
+ 431: }
+ 432: /* USER CODE END 4 */
+ 433: /**
+ 434:   *
+ 435:   * @brief  Period elapsed callback in non blocking mode
+ 436:   * @note   This function is called  when TIM2 interrupt took place, inside
+-----
+ 423: }
+ 424: if(hadc->Instance == ADC3)   {
+ 425: ADC_Current[2] = HAL_ADCEx_InjectedGetValue(hadc, ADC_INJECTED_RANK_1);
+ 426: /* IC   */
+ 427: ADC_Voltage[2] = HAL_ADCEx_InjectedGetValue(hadc, ADC_INJECTED_RANK_2);
+ 428: /* VC   */
+ 429: Voltage[2] = ADC_Voltage[2] * ADC_VREF / 4095.0f;
+ 430: }
+ 431: }
+ 432: /* USER CODE END 4 */
+ 433: /**
+ 434:   *
+ 435:   * @brief  Period elapsed callback in non blocking mode
+ 436:   * @note   This function is called  when TIM2 interrupt took place, inside
+ 437:   * HAL_TIM_IRQHandler(). It makes a direct call to HAL_IncTick() to increment
+ 438:   * a global variable "uwTick" used as application time base.
+ 439:   * @param  htim : TIM handle
+ 440:   * @retval None
+ 441:   */
+ 442: void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim) {
+ 443: /* USER CODE BEGIN Callback 0 */
+-----
+ 425: ADC_Current[2] = HAL_ADCEx_InjectedGetValue(hadc, ADC_INJECTED_RANK_1);
+ 426: /* IC   */
+ 427: ADC_Voltage[2] = HAL_ADCEx_InjectedGetValue(hadc, ADC_INJECTED_RANK_2);
+ 428: /* VC   */
+ 429: Voltage[2] = ADC_Voltage[2] * ADC_VREF / 4095.0f;
+ 430: }
+ 431: }
+ 432: /* USER CODE END 4 */
+ 433: /**
+ 434:   *
+ 435:   * @brief  Period elapsed callback in non blocking mode
+ 436:   * @note   This function is called  when TIM2 interrupt took place, inside
+ 437:   * HAL_TIM_IRQHandler(). It makes a direct call to HAL_IncTick() to increment
+ 438:   * a global variable "uwTick" used as application time base.
+ 439:   * @param  htim : TIM handle
+ 440:   * @retval None
+ 441:   */
+ 442: void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim) {
+ 443: /* USER CODE BEGIN Callback 0 */
+ 444: 
+ 445: /* USER CODE END Callback 0 */
+-----

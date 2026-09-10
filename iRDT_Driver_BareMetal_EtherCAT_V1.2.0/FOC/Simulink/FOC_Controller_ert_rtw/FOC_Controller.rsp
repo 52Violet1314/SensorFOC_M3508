@@ -1,0 +1,6 @@
+CurrentControl.obj
+FOC_Controller.obj
+ModeRegul.obj
+PositionControl.obj
+SpeedControl.obj
+rt_main.obj
