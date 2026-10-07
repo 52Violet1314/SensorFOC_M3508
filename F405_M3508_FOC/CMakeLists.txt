@@ -31,6 +31,10 @@ message("Build type: " ${CMAKE_BUILD_TYPE})
 # Enable CMake support for ASM and C languages
 enable_language(C ASM)
 
+# 40 kHz 控制中断需要时序余量: 默认 Debug 是 -O0, ISR 会来不及, 强制 -O2
+# (放在 add_executable / add_subdirectory 之前, 对工程本体与 HAL 都生效)
+add_compile_options(-O2)
+
 # Create an executable object type
 add_executable(${CMAKE_PROJECT_NAME})
 

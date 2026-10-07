@@ -14,7 +14,7 @@ void BSP_Timer_PWM_Start(void)
     __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_1, 0);
     __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_2, 0);
     __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_3, 0);
-    __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_4, 8350);  /* 中心对齐: ARR-DeadTime, 避开端点并在死区结束后采样, 10kHz */
+    __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_4, 2050);  /* 中心对齐: ARR-DeadTime(50), 死区后采样, 40kHz */
     HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_1);
     HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_2);
     HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_3);

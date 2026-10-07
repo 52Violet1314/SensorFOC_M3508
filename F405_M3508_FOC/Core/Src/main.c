@@ -5,6 +5,7 @@
 #include "gpio.h"
 #include "spi.h"
 #include "tim.h"
+#include "Control.h"
 
 static void SystemClock_Config(void);
 
@@ -21,8 +22,10 @@ int main(void)
     MX_TIM1_Init();
     MX_CAN1_Init();
 
-    App_FOC_Init();
 
+
+    App_FOC_Init();
+    Control_SetSpeedTarget(3000.0f);
     while (1)
     {
         App_FOC_MainLoop();

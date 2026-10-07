@@ -58,7 +58,7 @@ void TIM1_UP_TIM10_IRQHandler(void);
 void TIM2_IRQHandler(void);
 void OTG_FS_IRQHandler(void);
 /* USER CODE BEGIN EFP */
-
+void TIM1_CC_IRQHandler(void);
 /* USER CODE END EFP */
 
 #ifdef __cplusplus

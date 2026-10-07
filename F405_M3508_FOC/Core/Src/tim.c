@@ -45,7 +45,7 @@ void MX_TIM1_Init(void)
   htim1.Instance = TIM1;
   htim1.Init.Prescaler = 0;
   htim1.Init.CounterMode = TIM_COUNTERMODE_CENTERALIGNED1;
-  htim1.Init.Period = 8400;
+  htim1.Init.Period = 2100;   /* 168MHz/(2*2100) = 40kHz (HFI 注入 20kHz) */
   htim1.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
   htim1.Init.RepetitionCounter = 0;
   htim1.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_ENABLE;
@@ -124,7 +124,11 @@ void HAL_TIM_Base_MspInit(TIM_HandleTypeDef* tim_baseHandle)
     HAL_NVIC_SetPriority(TIM1_UP_TIM10_IRQn, 5, 0);
     HAL_NVIC_EnableIRQ(TIM1_UP_TIM10_IRQn);
   /* USER CODE BEGIN TIM1_MspInit 1 */
-
+    /* HFI: CC4 事件即注入组 ADC 的采样触发时刻, 在该中断里同步切换注入电压 */
+    __HAL_TIM_ENABLE_IT(&htim1, TIM_IT_CC4);
+    /* 优先级必须高于 ADC(5): CC4 写入必须在采样时刻立即生效, 不能被 ADC 中断挡住 */
+    HAL_NVIC_SetPriority(TIM1_CC_IRQn, 0, 0);
+    HAL_NVIC_EnableIRQ(TIM1_CC_IRQn);
   /* USER CODE END TIM1_MspInit 1 */
   }
 }

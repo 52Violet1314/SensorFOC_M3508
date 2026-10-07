@@ -22,6 +22,7 @@
 #include "stm32f4xx_it.h"
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
+#include "HFI.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -246,5 +247,20 @@ void OTG_FS_IRQHandler(void)
 }
 
 /* USER CODE BEGIN 1 */
+
+/**
+  * @brief TIM1 捕获/比较中断: 只处理 CC4(= 注入采样时刻)。
+  *        不用 HAL_TIM_IRQHandler, 避免 -O0 下长判断链带来的额外延迟:
+  *        该中断必须在采样时刻立刻把新的注入电压写进 CCR。
+  */
+void TIM1_CC_IRQHandler(void)
+{
+  if (__HAL_TIM_GET_FLAG(&htim1, TIM_FLAG_CC4) != RESET &&
+      __HAL_TIM_GET_IT_SOURCE(&htim1, TIM_IT_CC4) != RESET)
+  {
+    __HAL_TIM_CLEAR_IT(&htim1, TIM_IT_CC4);
+    HFI_Cc4Irq();
+  }
+}
 
 /* USER CODE END 1 */

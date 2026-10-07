@@ -21,7 +21,11 @@
 #include "adc.h"
 
 /* USER CODE BEGIN 0 */
-
+/* 注入组采样时间(三只 ADC 共用): 40kHz 周期只有 25us, 4 通道必须转换完
+ *   28 周期 -> 4*(28+12)/21MHz = 7.6us   (默认; 对模拟前端建立时间要求较高)
+ *   56 周期 -> 4*(56+12)/21MHz = 18.3us  (更稳; 电流/编码器读数异常时换这个)
+ *   (原 144 周期 = 29.7us, 在 40kHz 下装不下) */
+#define APP_ADC_INJ_SAMPLETIME   ADC_SAMPLETIME_28CYCLES
 /* USER CODE END 0 */
 
 ADC_HandleTypeDef hadc1;
@@ -77,7 +81,7 @@ void MX_ADC1_Init(void)
   sConfigInjected.InjectedChannel = ADC_CHANNEL_0;
   sConfigInjected.InjectedRank = 1;
   sConfigInjected.InjectedNbrOfConversion = 4;
-  sConfigInjected.InjectedSamplingTime = ADC_SAMPLETIME_144CYCLES;
+  sConfigInjected.InjectedSamplingTime = APP_ADC_INJ_SAMPLETIME;
   sConfigInjected.ExternalTrigInjecConvEdge = ADC_EXTERNALTRIGINJECCONVEDGE_RISING;
   sConfigInjected.ExternalTrigInjecConv = ADC_EXTERNALTRIGINJECCONV_T1_CC4;
   sConfigInjected.AutoInjectedConv = DISABLE;
@@ -168,7 +172,7 @@ void MX_ADC2_Init(void)
   sConfigInjected.InjectedChannel = ADC_CHANNEL_1;
   sConfigInjected.InjectedRank = 1;
   sConfigInjected.InjectedNbrOfConversion = 4;
-  sConfigInjected.InjectedSamplingTime = ADC_SAMPLETIME_144CYCLES;
+  sConfigInjected.InjectedSamplingTime = APP_ADC_INJ_SAMPLETIME;
   sConfigInjected.ExternalTrigInjecConvEdge = ADC_EXTERNALTRIGINJECCONVEDGE_RISING;
   sConfigInjected.ExternalTrigInjecConv = ADC_EXTERNALTRIGINJECCONV_T1_CC4;
   sConfigInjected.AutoInjectedConv = DISABLE;
@@ -259,7 +263,7 @@ void MX_ADC3_Init(void)
   sConfigInjected.InjectedChannel = ADC_CHANNEL_2;
   sConfigInjected.InjectedRank = 1;
   sConfigInjected.InjectedNbrOfConversion = 2;
-  sConfigInjected.InjectedSamplingTime = ADC_SAMPLETIME_144CYCLES;
+  sConfigInjected.InjectedSamplingTime = APP_ADC_INJ_SAMPLETIME;
   sConfigInjected.ExternalTrigInjecConvEdge = ADC_EXTERNALTRIGINJECCONVEDGE_RISING;
   sConfigInjected.ExternalTrigInjecConv = ADC_EXTERNALTRIGINJECCONV_T1_CC4;
   sConfigInjected.AutoInjectedConv = DISABLE;
