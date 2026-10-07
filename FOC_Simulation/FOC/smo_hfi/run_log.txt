@@ -1,0 +1,7 @@
+SH: === stage 1 smoke test ===
+SH: stage 1 OK
+SH: === stage 2 build model ===
+SH: stage 2 OK
+SH: === stage 3 simulate ===
+SH: stage 3 OK
+SH: === all stages done ===

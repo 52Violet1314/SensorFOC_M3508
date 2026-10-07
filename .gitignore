@@ -1,0 +1,11 @@
+# --- MATLAB / Simulink 自动生成的缓存与备份 ---
+slprj/
+*.slxc
+*.slx.autosave
+*.autosave
+*.slx.r*
+*.asv
+*~
+
+# --- 本地压缩包 / 临时文件 ---
+Sensor_FOC.rar
