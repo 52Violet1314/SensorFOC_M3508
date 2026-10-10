@@ -99,6 +99,11 @@ void  VF_Init(void);                        /* 复位斜坡/积分角/判定状�
 void  VF_Reset(void);
 void  VF_SetEnable(uint8_t on);             /* 使能开环通路(内部先走对齐阶段) */
 uint8_t VF_IsEnabled(void);
+/* 使能审计: 记录每次"开/关"的变化, 用来查"谁把开环关掉了" */
+uint32_t VF_GetEnSetCnt(void);
+uint32_t VF_GetEnClrCnt(void);
+const uint8_t *VF_GetEnLog(void);
+uint8_t VF_GetEnLogN(void);
 void  VF_Tick(float vdc, float theta_elec); /* 在 40kHz ADC 中断里调用 */
 
 const VF_Config_t *VF_GetConfig(void);
@@ -125,6 +130,12 @@ uint8_t VF_GetStallEnable(void);
 void  VF_SetPark(float degrees, float volts);
 float VF_GetParkDeg(void);
 float VF_GetParkV(void);
+/* 开环自检: 用编码器实测角度反推实际电频率, 判断 vf_dt/频率换算对不对 */
+void  VF_DebugFreq(float theta_elec, float dt);
+float VF_GetDbgFeAct(void);
+float VF_GetDbgFeCmd(void);
+float VF_GetDbgDt(void);
+float VF_GetDt(void);
 /* 观测器每拍的结果由 App_FOC.c 写进来(供失步判定/打点用) */
 void  VF_SetObsFeedback(float emf, float rpm_obs);
 

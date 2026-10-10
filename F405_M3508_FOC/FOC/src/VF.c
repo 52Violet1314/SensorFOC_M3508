@@ -112,6 +112,31 @@ void VF_Reset(void)
     VF_Init();
 }
 
+/* 使能/关断的审计记录: 每次状态变化都记下来, 谁把开环关掉了要能查出来。
+ *   ★这几行由 App_FOC.c 的中断侧每 2 秒打印一次(不依赖主循环),
+ *     所以"主循环卡死 / USB 命令没送达"这两种情况能区分开。 */
+static uint8_t  vf_en_log[8];        /* 最近的 8 次状态变化: 1=开 0=关 */
+static uint8_t  vf_en_log_n;
+static uint32_t vf_en_set_cnt;       /* 累计"开"次数 */
+static uint32_t vf_en_clr_cnt;       /* 累计"关"次数 */
+
+static void vf_log_enable(uint8_t on)
+{
+    if (vf_en_log_n < 8u) vf_en_log[vf_en_log_n++] = on;
+    else
+    {
+        for (uint8_t i = 1u; i < 8u; i++) vf_en_log[i - 1u] = vf_en_log[i];
+        vf_en_log[7] = on;
+    }
+    if (on != 0u) vf_en_set_cnt++;
+    else          vf_en_clr_cnt++;
+}
+
+uint32_t VF_GetEnSetCnt(void) { return vf_en_set_cnt; }
+uint32_t VF_GetEnClrCnt(void) { return vf_en_clr_cnt; }
+const uint8_t *VF_GetEnLog(void) { return vf_en_log; }
+uint8_t VF_GetEnLogN(void) { return vf_en_log_n; }
+
 void VF_SetEnable(uint8_t on)
 {
     if (on != 0u)
@@ -133,6 +158,10 @@ void VF_SetEnable(uint8_t on)
         vf_target_rpm = 0.0f;
         vf_speed_rpm  = 0.0f;
         vf_stall      = 0u;         /* ★关断也清, 保证下一次是干净状态 */
+    }
+    if (((on != 0u) ? 1u : 0u) != vf_enabled)   /* 只在真正变化时记一笔 */
+    {
+        vf_log_enable((on != 0u) ? 1u : 0u);
     }
     vf_enabled = (on != 0u) ? 1u : 0u;
 }
@@ -259,6 +288,52 @@ void VF_SetPark(float degrees, float volts)
 
 float VF_GetParkDeg(void) { return vf_park_deg; }
 float VF_GetParkV(void)   { return vf_park_v; }
+
+/* --------------------------------------------------------------------------
+ * 开环自检: 用"编码器实测角度"反推实际电频率, 和指令频率对比。
+ *
+ *   为什么要这个: 开环驱动角是 θ += 2π·fe·vf_dt 积出来的, 完全依赖 vf_dt 标定。
+ *   编码器闭环用的是硬件实测角, 不依赖 vf_dt —— 所以"闭环能转、开环不转"时,
+ *   第一个要怀疑的就是 vf_dt / 频率换算。这里把三者摆在一起, 一眼就能看出错在哪:
+ *     fe_cmd : 代码按 vf_speed_rpm 算出来的指令电频率
+ *     fe_act : 编码器角度差分反推出来的实际电频率
+ *     ratio  : fe_act / fe_cmd —— 正常≈1; 差 2 倍/10 倍就是 vf_dt 或换算错了
+ *   注意: 必须在电机真的跟着转的时候看才有意义(没转的话 fe_act 自然是 0)。
+ * ------------------------------------------------------------------------ */
+static float    vf_dbg_theta_prev;
+static uint8_t  vf_dbg_valid;
+static float    vf_dbg_fe_act;
+static float    vf_dbg_fe_cmd;
+static float    vf_dbg_dt_used;
+
+void VF_DebugFreq(float theta_elec, float dt)
+{
+    float d;
+
+    vf_dbg_dt_used = dt;
+    vf_dbg_fe_cmd  = vf_speed_rpm / 60.0f * (float)VF_POLE_PAIRS;
+
+    if (dt <= 0.0f) return;
+
+    if (vf_dbg_valid == 0u)
+    {
+        vf_dbg_theta_prev = theta_elec;
+        vf_dbg_valid = 1u;
+        return;
+    }
+    d = theta_elec - vf_dbg_theta_prev;
+    if (d >  APP_PI) d -= APP_TWO_PI;
+    if (d < -APP_PI) d += APP_TWO_PI;
+    vf_dbg_theta_prev = theta_elec;
+
+    /* 再低通一次, 免得被单点噪声带偏 */
+    vf_dbg_fe_act += 0.002f * (d / APP_TWO_PI / dt - vf_dbg_fe_act);
+}
+
+float VF_GetDbgFeAct(void) { return vf_dbg_fe_act; }
+float VF_GetDbgFeCmd(void) { return vf_dbg_fe_cmd; }
+float VF_GetDbgDt(void)    { return vf_dbg_dt_used; }
+float VF_GetDt(void)       { return vf_dt; }
 
 void VF_SetObsFeedback(float emf, float rpm_obs)
 {

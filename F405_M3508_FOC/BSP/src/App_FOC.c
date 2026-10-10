@@ -447,6 +447,18 @@ static void App_PrintOpenLoopLive(void)
                      (double)VF_GetConfig()->v_boost_lo,
                      (double)VF_GetConfig()->f_res);
 #endif
+    /* ★开环自检行: 频率口径对不对, 看这一行就够了
+     *   fe_cmd = 指令电频率(代码算的)
+     *   fe_act = 编码器实测角反推的电频率
+     *   ratio  = fe_act/fe_cmd, 正常应当≈1.00(电机确实跟着转的前提下)
+     *   若 ratio 差 2 倍/10 倍 -> vf_dt 标定错了(它是开环唯一的"时间基准") */
+    (void)CDC_Printf("# FREQ vf_dt=%.3fus fe_cmd=%.2fHz fe_act=%.2fHz ratio=%.3f "
+                     "rpm_cmd=%.0f enc_vld=%u\r\n",
+                     (double)(VF_GetDbgDt() * 1.0e6),
+                     (double)VF_GetDbgFeCmd(), (double)VF_GetDbgFeAct(),
+                     (VF_GetDbgFeCmd() > 0.1f)
+                         ? (double)(VF_GetDbgFeAct() / VF_GetDbgFeCmd()) : 0.0,
+                     (double)VF_GetTargetRPM(), (unsigned)Encoder_IsValid());
 }
 
 /* --------------------------------------------------------------------------
@@ -1027,6 +1039,8 @@ static void App_AdcStep(void)
         VF_SetObsFeedback(SMO.Output.Emf, SMO.Output.Rpm);
 #endif
         VF_Tick(Power, Encoder_Elec_Angle);
+        /* 开环自检: 拿编码器实测角反推实际电频率(判断 vf_dt 标定对不对) */
+        VF_DebugFreq(Encoder_Elec_Angle, VF_GetDt());
         if (prof_on != 0u)
         {
             uint32_t d = PROF_CYC() - c0;
@@ -1076,6 +1090,34 @@ static void App_AdcStep(void)
 
     /* 打点: 1kHz 降采样 */
     App_SmoStreamTick(HAL_GetTick(), now_us);
+
+    /* ★★ 从"中断侧"打印的状态行: 主循环/USB命令通道即使卡死, 这行也会出来。
+     *   用来一刀切开三种情况:
+     *     rx_total 一直不变  -> 上位机的命令根本没进 USB(线/驱动/接收方向)
+     *     rx_total 在涨、set=0 -> 命令进来了但没解析成 vf(命令拼写/结尾符)
+     *     set>=1 但 vf=0      -> 命令生效过又被关掉了(看 log 里的开关序列)
+     *     vf=1                -> 开环其实已经使能, 问题在 V/F 内部(看 FREQ 行) */
+    {
+        static uint32_t isr_dbg_ms;
+        uint32_t tnow = HAL_GetTick();
+
+        if (tnow - isr_dbg_ms >= 2000u)
+        {
+            const uint8_t *lg = VF_GetEnLog();
+            uint8_t n = VF_GetEnLogN();
+
+            isr_dbg_ms = tnow;
+            (void)CDC_Printf("# ISRDBG t=%u vf=%u set=%u clr=%u rx_total=%u rx_drop=%u "
+                             "en_log=%u%u%u%u%u%u\r\n",
+                             (unsigned)tnow, (unsigned)VF_IsEnabled(),
+                             (unsigned)VF_GetEnSetCnt(), (unsigned)VF_GetEnClrCnt(),
+                             (unsigned)CDC_RxTotal(), (unsigned)CDC_RxDropped(),
+                             (unsigned)(n > 0u ? lg[0] : 9u), (unsigned)(n > 1u ? lg[1] : 9u),
+                             (unsigned)(n > 2u ? lg[2] : 9u), (unsigned)(n > 3u ? lg[3] : 9u),
+                             (unsigned)(n > 4u ? lg[4] : 9u), (unsigned)(n > 5u ? lg[5] : 9u));
+        }
+    }
+
 
     HAL_GPIO_WritePin(LED_Red_GPIO_Port, LED_Red_Pin,
                       (HAL_GPIO_ReadPin(FAULT_GPIO_Port, FAULT_Pin) == GPIO_PIN_RESET) ?

@@ -109,6 +109,7 @@ static volatile uint8_t  cdc_rx_ring[CDC_RX_RING_SIZE];
 static volatile uint16_t cdc_rx_head;
 static volatile uint16_t cdc_rx_tail;
 static volatile uint32_t cdc_rx_dropped;
+static volatile uint32_t cdc_rx_total;   /* 累计收到的字节数 */
 
 /* USER CODE END PRIVATE_VARIABLES */
 
@@ -287,6 +288,7 @@ static int8_t CDC_Receive_FS(uint8_t* Buf, uint32_t *Len)
     cdc_rx_ring[cdc_rx_head] = Buf[i];
     cdc_rx_head = next;
   }
+  cdc_rx_total += *Len;
   USBD_CDC_SetRxBuffer(&hUsbDeviceFS, &Buf[0]);
   USBD_CDC_ReceivePacket(&hUsbDeviceFS);
   return (USBD_OK);
@@ -399,6 +401,14 @@ uint32_t CDC_RxTake(uint8_t *dst, uint16_t max)
 uint32_t CDC_RxDropped(void)
 {
   return cdc_rx_dropped;
+}
+
+/* 累计收到的字节数: 判断"上位机到底有没有发东西进来"。
+ *   ★只发不收(能打印但命令没反应)时这个值恒为 0 —— 那是 USB 接收方向的问题,
+ *     和命令解析、VF 逻辑都无关。 */
+uint32_t CDC_RxTotal(void)
+{
+  return cdc_rx_total;
 }
 
 /* USER CODE END PRIVATE_FUNCTIONS_IMPLEMENTATION */
