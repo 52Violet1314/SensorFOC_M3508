@@ -24,6 +24,7 @@
 /* USER CODE BEGIN INCLUDE */
 #include <stdio.h>
 #include <stdarg.h>
+#include <stddef.h>
 /* USER CODE END INCLUDE */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -95,6 +96,19 @@ uint8_t UserRxBufferFS[APP_RX_DATA_SIZE];
 uint8_t UserTxBufferFS[APP_TX_DATA_SIZE];
 
 /* USER CODE BEGIN PRIVATE_VARIABLES */
+
+/* ---------------------------------------------------------------------------
+ * 接收环形缓冲: USB 中断(CDC_Receive_FS)写, 主循环用 CDC_RxTake() 取。
+ * 原来 CDC_Receive_FS 只是把数据丢回端点, 上层拿不到命令; 有了这个缓冲,
+ * 上位机可以直接往虚拟串口写命令(见 App_FOC.c 的 App_UsbCommand)。
+ * ------------------------------------------------------------------------- */
+#define CDC_RX_RING_SIZE 256u
+#define CDC_RX_RING_MASK (CDC_RX_RING_SIZE - 1u)
+
+static volatile uint8_t  cdc_rx_ring[CDC_RX_RING_SIZE];
+static volatile uint16_t cdc_rx_head;
+static volatile uint16_t cdc_rx_tail;
+static volatile uint32_t cdc_rx_dropped;
 
 /* USER CODE END PRIVATE_VARIABLES */
 
@@ -262,6 +276,17 @@ static int8_t CDC_Control_FS(uint8_t cmd, uint8_t* pbuf, uint16_t length)
 static int8_t CDC_Receive_FS(uint8_t* Buf, uint32_t *Len)
 {
   /* USER CODE BEGIN 6 */
+  for (uint32_t i = 0u; i < *Len; i++)
+  {
+    uint16_t next = (uint16_t)((cdc_rx_head + 1u) & CDC_RX_RING_MASK);
+    if (next == cdc_rx_tail)
+    {
+      cdc_rx_dropped++;      /* 主循环没跟上, 丢字节 */
+      break;
+    }
+    cdc_rx_ring[cdc_rx_head] = Buf[i];
+    cdc_rx_head = next;
+  }
   USBD_CDC_SetRxBuffer(&hUsbDeviceFS, &Buf[0]);
   USBD_CDC_ReceivePacket(&hUsbDeviceFS);
   return (USBD_OK);
@@ -349,6 +374,31 @@ int CDC_Printf(const char *format, ...)
   }
 
   return len;
+}
+
+/**
+  * @brief  CDC_RxTake
+  *         从接收环形缓冲取字节(主循环调用), 返回实际取到的字节数
+  * @param  dst: 目标缓冲, max: 最多取多少字节
+  */
+uint32_t CDC_RxTake(uint8_t *dst, uint16_t max)
+{
+  uint32_t n = 0u;
+
+  if (dst == NULL) return 0u;
+
+  while (n < (uint32_t)max && cdc_rx_tail != cdc_rx_head)
+  {
+    dst[n++] = cdc_rx_ring[cdc_rx_tail];
+    cdc_rx_tail = (uint16_t)((cdc_rx_tail + 1u) & CDC_RX_RING_MASK);
+  }
+
+  return n;
+}
+
+uint32_t CDC_RxDropped(void)
+{
+  return cdc_rx_dropped;
 }
 
 /* USER CODE END PRIVATE_FUNCTIONS_IMPLEMENTATION */

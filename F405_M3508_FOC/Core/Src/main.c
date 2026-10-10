@@ -25,7 +25,7 @@ int main(void)
 
 
     App_FOC_Init();
-    Control_SetSpeedTarget(3000.0f);
+    // Control_SetSpeedTarget(3000.0f);
     while (1)
     {
         App_FOC_MainLoop();

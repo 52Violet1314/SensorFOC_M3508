@@ -8,15 +8,16 @@
 #include "Encoder.h"
 #include "FOC_Param.h"
 #include "gpio.h"
-#include "HFI.h"
-#include "PLL.h"
-#include "SMO.h"
 #include "SVPWM.h"
+#include "SMO.h"
 #include "tim.h"
 #include "Transformer.h"
 #include "usb_device.h"
 #include "usbd_cdc_if.h"
+#include "VF.h"
 #include <math.h>
+#include <stdio.h>
+#include <string.h>
 
 float ADC_Current[3];
 float ADC_Voltage[3];
@@ -44,33 +45,17 @@ float Encoder_Mech_Position;
 float csa_vmid[3] = {2047.0f, 2047.0f, 2047.0f};
 float spd_meas_rpm;
 
+/* 观测角对照用的常数偏置(诊断): 观测角 + Lag + 偏置 应等于编码器角 */
+float obs_angle_off = OL_ANGLE_OFF_DEF;
+
 static volatile uint8_t adc_cal_done;
 static uint32_t cal_sum[3];
 static uint32_t cal_count[3];
 static volatile uint8_t adc_group_mask;
-static uint8_t hfi_trip;
-static uint8_t hfi_hdr_done;
 static uint8_t isr_cyc_reported;
-static uint32_t hfi_debug_ms;
 static uint32_t encoder_last_valid_ms;
 static uint32_t can_feedback_ms;
 static uint32_t heartbeat_ms;
-static uint32_t obs_debug_ms;
-static uint8_t obs_hdr_done;
-static SMO_Config_t smo_obs;   /* 滑模观测器 */
-static PLL_t        smo_pll;   /* 观测角度的锁相环: 平滑角度 + 直接给速度 */
-/* 观测定角(高速区): 控制角在"编码器角"和"观测角"之间按 ramp 平滑交接 */
-static float   theta_ctrl;      /* 本拍 Park/DePark 统一使用的角度 */
-static float   obs_ramp;        /* 0=编码器角, 1=观测角 */
-static float   obs_ang_off;     /* 观测角常数偏置 rad */
-static float   obs_cmd_theta;   /* 观测角命令值 = PLL角 + 群延迟补偿 + 偏置(控制/打印都用它) */
-static float   obs_switch_rpm;  /* 切换阈值(电机侧 rpm) */
-static uint8_t obs_angle_en;    /* 1 = 允许自动切换(默认开, CAN 0x15 可改) */
-static uint32_t obs_arm_cnt;    /* 切换条件已连续成立的拍数 */
-static uint8_t theta_ctrl_init;
-
-/* 观测器入口(实现在下面, 换观测器只改这一个函数) */
-static uint8_t App_ObserverStep(float ia, float ib, float va, float vb);
 
 static float cur_id_ref;
 static float cur_iq_ref;
@@ -103,6 +88,203 @@ static CurrentFilter_t ib_filter;
 static CurrentFilter_t id_filter;
 static CurrentFilter_t iq_filter;
 
+/* ==========================================================================
+ * SMO 打点: 1kHz 采样 -> 环形缓冲 -> 主循环格式化走 USB CDC
+ *
+ *   为什么中断里不直接 printf: vsnprintf 里 13 个浮点格式化要 50~100us,
+ *   40kHz 中断预算只有 25us, 必超。所以中断只搬 13 个 float(约 30 拍),
+ *   格式化和 USB 发送全放主循环(1ms 一次, 排空缓冲)。
+ * ========================================================================== */
+#define SMO_STREAM_HZ        1000u
+#define SMO_STREAM_BUF_LEN   64u          /* 2 的幂, 便于取模 */
+#define SMO_STREAM_BUF_MASK  (SMO_STREAM_BUF_LEN - 1u)
+
+typedef struct
+{
+    uint32_t t_ms;
+    float theta_obs;   /* 观测电角度 rad */
+    float theta_enc;   /* 编码器电角度 rad(真值) */
+    float err;         /* 观测 − 编码器, 归一化到 [-pi,pi) */
+    float emf;         /* |E| V */
+    float omega_obs;   /* 观测电角速度 rad/s */
+    float rpm_obs;     /* 观测电机侧转速 rpm */
+    float rpm_enc;     /* 编码器差分转速 rpm */
+    float ialpha;
+    float ibeta;
+    float valpha;
+    float vbeta;
+    float vdc;
+    float imag;        /* 电流矢量幅值 A  ← 判断堵转/限流的关键列 */
+    float vcmd;        /* 本拍输出电压幅值 V */
+    uint8_t flags;     /* bit0 running, bit1 boost_lo, bit2 stall, bit3 aligned */
+} Smo_Sample_t;
+
+static volatile Smo_Sample_t smo_buf[SMO_STREAM_BUF_LEN];
+static volatile uint8_t  smo_head;        /* 中断写 */
+static volatile uint8_t  smo_tail;        /* 主循环读 */
+static volatile uint8_t  smo_stream_on;
+static volatile uint32_t smo_dropped;
+static uint32_t smo_last_us;
+static uint32_t smo_stat_ms;
+
+/* 中断统计(供 DIAG 块使用, 定义提前到这里以免被下面的函数看不到) */
+static uint32_t prof_ticks_total;   /* 累计进入中断的次数 */
+static uint32_t isr_over_cnt;       /* 中断本体超过预算的次数(丢拍证据) */
+
+/* 方向自检: 编码器在转时, 观测角每拍增量是否与编码器同号(同号才说明符号口径对)。
+ *   观测角是镜像形式(atan2(+e_alpha,...))时, 这两个计数会一边倒 —— 一次上电测试就能判定。 */
+static uint32_t smo_dir_ok;
+static uint32_t smo_dir_bad;
+static float    smo_theta_prev_isr;
+
+static void App_PrintStatus(void);
+
+/* DWT 周期计数 -> us(打点时间戳用, 32 位计数器 25.6s 回绕, 只用于间隔判断) */
+static inline uint32_t App_NowUs(void)
+{
+    return DWT->CYCCNT / (SystemCoreClock / 1000000u);
+}
+
+/* 观测角与编码器角的差, 归一化到 [-pi, pi)
+ * 观测角要补上相位滞后(SMO.Output.Lag)再和编码器角比, 否则会看到一个随转速漂的偏置 */
+static float App_AngleDiff(float a, float b)
+{
+    float d = a - b;
+    while (d >= APP_PI) d -= APP_TWO_PI;
+    while (d < -APP_PI) d += APP_TWO_PI;
+    return d;
+}
+
+static float App_ObsCompensated(void)
+{
+    return SMO.Output.Theta + SMO.Output.Lag + obs_angle_off;
+}
+
+static void App_SmoStreamTick(uint32_t now_ms, uint32_t now_us)
+{
+    Smo_Sample_t *s;
+    uint8_t next;
+
+    if (smo_stream_on == 0u) return;
+    if ((uint32_t)(now_us - smo_last_us) < (1000000u / SMO_STREAM_HZ)) return;
+    smo_last_us = now_us;
+
+    next = (uint8_t)((smo_head + 1u) & SMO_STREAM_BUF_MASK);
+    if (next == smo_tail)
+    {
+        smo_dropped++;      /* 主循环没跟上, 丢一帧(摘要行里会报出来) */
+        return;
+    }
+
+    s = (Smo_Sample_t *)&smo_buf[smo_head];
+    s->t_ms      = now_ms;
+    s->theta_obs = SMO.Output.Theta;
+    s->theta_enc = SMO.Output.ThetaEnc;
+    s->err       = App_AngleDiff(App_ObsCompensated(), SMO.Output.ThetaEnc);
+    s->emf       = SMO.Output.Emf;
+    s->omega_obs = SMO.Output.Speed;
+    s->rpm_obs   = SMO.Output.Rpm;
+    s->rpm_enc   = vf_speed_meas_rpm;
+    s->ialpha    = SMO.Input.Ialpha;
+    s->ibeta     = SMO.Input.Ibeat;
+    s->valpha    = SMO.Input.Valpha;
+    s->vbeta     = SMO.Input.Vbeta;
+    s->vdc       = Power;
+    s->imag      = cur_mag_filt;
+    s->vcmd      = vf_v_out;
+    s->flags     = (uint8_t)((vf_running != 0u ? 1u : 0u) |
+                             (vf_boost_lo_on != 0u ? 2u : 0u) |
+                             (vf_stall != 0u ? 4u : 0u) |
+                             (vf_aligned != 0u ? 8u : 0u));
+    smo_head     = next;
+}
+
+/* 主循环: 每次尽量把缓冲排空(受 USB 端点忙限制) */
+static void App_SmoStreamDrain(void)
+{
+    uint8_t budget = 4u;
+
+    while (budget-- > 0u && smo_tail != smo_head)
+    {
+        volatile Smo_Sample_t *s = &smo_buf[smo_tail];
+
+        if (CDC_Printf("%u,%.4f,%.4f,%.4f,%.4f,%.2f,%.1f,%.1f,%.3f,%.3f,%.3f,%.3f,%.2f,%.2f,%.2f,%u\r\n",
+                       (unsigned)s->t_ms, (double)s->theta_obs, (double)s->theta_enc,
+                       (double)s->err, (double)s->emf, (double)s->omega_obs,
+                       (double)s->rpm_obs, (double)s->rpm_enc,
+                       (double)s->ialpha, (double)s->ibeta,
+                       (double)s->valpha, (double)s->vbeta, (double)s->vdc,
+                       (double)s->imag, (double)s->vcmd, (unsigned)s->flags) < 0)
+        {
+            break;      /* USB 忙, 下一轮再来 */
+        }
+        smo_tail = (uint8_t)((smo_tail + 1u) & SMO_STREAM_BUF_MASK);
+    }
+}
+
+static void App_PrintStreamHeader(void)
+{
+    (void)CDC_Printf("# fs=%uHz drv=%s enc=%u vf=%u rpm_cmd=%.0f |E|_min=%.2f "
+                     "k=%.0f delta=%.1f slope=%.3f vmax=%.2f fstart=%.2f valign=%.2f off=%.3f\r\n",
+                     (unsigned)APP_CTRL_HZ,
+                     (VF_GetDriveMode() == VF_DRV_ENCODER) ? "encoder" : "openloop",
+                     (unsigned)Encoder_IsValid(), (unsigned)VF_IsEnabled(),
+                     (double)vf_speed_rpm, (double)OBS_EMF_MIN_V,
+                     (double)SMO_GetGain(), (double)SMO_GetBoundary(),
+                     (double)VF_GetConfig()->v_slope,
+                     (double)VF_GetConfig()->v_max,
+                     (double)VF_GetConfig()->f_start,
+                     (double)VF_GetConfig()->v_align,
+                     (double)obs_angle_off);
+    (void)CDC_Printf("#t_ms,theta_obs,theta_enc,err,emf,omega_obs,rpm_obs,rpm_enc,"
+                     "ialpha,ibeta,valpha,vbeta,vdc,imag,vcmd,flags\r\n");
+    if (VF_GetDriveMode() != VF_DRV_ENCODER)
+    {
+        (void)CDC_Printf("# 开环模式(无编码器): theta_enc / err / rpm_enc 三列无意义, "
+                         "只对 theta_obs / emf / rpm_obs 与 rpm_cmd 感兴趣\r\n");
+    }
+}
+
+/* 每 500ms 一行摘要: 最近这段 |err| 的均值/标准差, 用来判断"是否真在跟踪" */
+static void App_PrintSmoStat(void)
+{
+    static float    sum_err;
+    static float    sum_sq;
+    static float    sum_emf;
+    static uint32_t n;
+    uint32_t now = HAL_GetTick();
+
+    if (smo_tail != smo_head)
+    {
+        uint8_t last = (uint8_t)((smo_head + SMO_STREAM_BUF_LEN - 1u) & SMO_STREAM_BUF_MASK);
+        float e = smo_buf[last].err;
+
+        sum_err += e;
+        sum_sq  += e * e;
+        sum_emf += smo_buf[last].emf;
+        n++;
+    }
+
+    if (now - smo_stat_ms >= 500u && n > 0u)
+    {
+        float mean = sum_err / (float)n;
+        float var  = sum_sq / (float)n - mean * mean;
+
+        smo_stat_ms = now;
+        (void)CDC_Printf("# smo n=%u err_mean=%+.3f err_std=%.3f |E|=%.2f "
+                         "rpm_obs=%.0f rpm_enc=%.0f drop=%u\r\n",
+                         (unsigned)n, (double)mean,
+                         (double)((var > 0.0f) ? sqrtf(var) : 0.0f),
+                         (double)(sum_emf / (float)n),
+                         (double)SMO.Output.Rpm, (double)vf_speed_meas_rpm,
+                         (unsigned)smo_dropped);
+        sum_err = 0.0f;
+        sum_sq  = 0.0f;
+        sum_emf = 0.0f;
+        n       = 0u;
+    }
+}
+
 static float App_WrapAngle(float angle)
 {
     angle = fmodf(angle, APP_TWO_PI);
@@ -111,8 +293,15 @@ static float App_WrapAngle(float angle)
     return angle;
 }
 
+/* 电流滤波: 原来每拍做"5 点中值 + 低通", 中值那 4 趟插入排序在
+ *   40kHz/20kHz 中断里是纯浪费 —— 它只是为了显示/CAN 上报好看。
+ *   改成一阶低通(两次乘加), 效果等价, 中断耗时大降。
+ *   若确实需要中值(强脉冲干扰场合), 把 APP_CUR_FILTER_MEDIAN 改 1。 */
+#define APP_CUR_FILTER_MEDIAN 0
+
 static float App_FilterCurrent(CurrentFilter_t *filter, float input)
 {
+#if (APP_CUR_FILTER_MEDIAN != 0)
     float sorted[APP_CURRENT_FILTER_WINDOW];
     float median;
 
@@ -135,6 +324,11 @@ static float App_FilterCurrent(CurrentFilter_t *filter, float input)
     }
     median = sorted[APP_CURRENT_FILTER_WINDOW / 2u];
     filter->low_pass += APP_CURRENT_LPF_ALPHA * (median - filter->low_pass);
+#else
+    (void)filter->sample;
+    (void)filter->index;
+    filter->low_pass += APP_CURRENT_LPF_ALPHA * (input - filter->low_pass);
+#endif
     return filter->low_pass;
 }
 
@@ -156,6 +350,7 @@ static uint8_t App_GetErrorCode(void)
 {
     if (Power < APP_VDC_MIN) return 0x01u;
     if (Power >= 27.0f) return 0x02u;
+    /* 开环测试时驱动角也来自编码器, 编码器失效仍需报错 */
     if (Encoder_IsValid() == 0u ||
         (HAL_GetTick() - encoder_last_valid_ms) > 20u) return 0x03u;
     if (Temp > 60.0f) return 0x04u;
@@ -181,75 +376,202 @@ static void App_SendCanFeedback(void)
     (void)BSP_CAN_SendStd(0x78u, data, 8u);
 }
 
-/* 打印 HFI 辨识结果: e2 = 2*编码器电角度, d2 = 2*辨识电角度,
-   两者应同步变化(可相差一个常数偏置); L0/L1 单位 mH; sal = L1/L0 百分比 */
-static void App_PrintHfiDebug(void)
+/* 开环运行时的实时诊断: 每 500ms 一行, 不开打点流也能看清驱动在干什么。
+ *   这一行是排查"不转"的第一手材料: v_out 有没有给出去、I 有没有上来、|E| 有没有建立。 */
+static void App_PrintOpenLoopLive(void)
 {
-    float e2 = Encoder_Elec_Angle * 2.0f;
-    float d2 = hfi_theta * 2.0f;
-    float sal = 0.0f;
+    static uint32_t next_ms;
+    static uint32_t cnt;
+    uint32_t now = HAL_GetTick();
 
-    while (e2 >= APP_TWO_PI) e2 -= APP_TWO_PI;
-    while (d2 >= APP_TWO_PI) d2 -= APP_TWO_PI;
-    if (hfi_l0 > 1.0e-5f) sal = hfi_l1 / hfi_l0 * 100.0f;
+    if (VF_IsEnabled() == 0u)
+    {
+        if (cnt != 0u)
+        {
+            (void)CDC_Printf("# openloop OFF (跑了 %u 行诊断)\r\n", (unsigned)cnt);
+            cnt = 0u;
+        }
+        next_ms = 0u;
+        return;
+    }
+    if (now < next_ms) return;
+    next_ms = now + 500u;
+    cnt++;
 
-    unsigned drv = (HAL_GPIO_ReadPin(FAULT_GPIO_Port, FAULT_Pin) == GPIO_PIN_RESET) ? 1u : 0u;
+    /* 诊断块: 一行把关键状态全带上(合并成一次 CDC_Printf, 降低出错面)。
+     *   ★格式串与实参一一对应, 改这里务必跑 python tools/audit_printf.py */
+    (void)CDC_Printf("# DIAG t=%u over=%u TIM1[CR1=%04X CCER=%04X ARR=%u C1=%u C2=%u C3=%u C4=%u] "
+                     "PARK[%.1fV/%.0fdeg] EN=%u vdc=%.2f I=%.2fA vout=%.2f ia=%.2f ib=%.2f ic=%.2f "
+                     "th_drv=%+.3f vf=%u align=%u\r\n",
+                     (unsigned)now, (unsigned)isr_over_cnt,
+                     (unsigned)TIM1->CR1, (unsigned)TIM1->CCER, (unsigned)TIM1->ARR,
+                     (unsigned)TIM1->CCR1, (unsigned)TIM1->CCR2, (unsigned)TIM1->CCR3,
+                     (unsigned)TIM1->CCR4,
+                     (double)VF_GetParkV(), (double)VF_GetParkDeg(),
+                     (unsigned)((GPIOB->ODR >> 6) & 1u),
+                     (double)Power, (double)cur_mag_filt, (double)vf_v_out,
+                     (double)Current[0], (double)Current[1], (double)Current[2],
+                     (double)vf_theta_cmd, (unsigned)VF_IsEnabled(),
+                     (unsigned)vf_aligned);
 
-    (void)CDC_Printf("# en=%u trip=%u drv=%u probe=%u U=%.2f fb=%u vdc=%.1f pol=%.0f "
-                     "fit=%u e2=%.3f d2=%.3f L0=%.3f L1=%.3f sal=%.2f I=%.2f\r\n",
-                     (unsigned)hfi_enable, (unsigned)hfi_trip, drv,
-                     (unsigned)hfi_probe, hfi_u_inj, (unsigned)hfi_foldback,
-                     Power, hfi_pol, (unsigned)hfi_fit_count,
-                     e2, d2, hfi_l0 * 1000.0f, hfi_l1 * 1000.0f, sal,
-                     hfi_i_peak);
-}
+    /* 点动模式单独一行, 免得和 V/F 状态混淆 */
+    if (VF_GetParkV() > 0.05f)
+    {
+        (void)CDC_Printf("# PARK deg=%.1f V=%.2f I=%.1fA vdc=%.1f (固定角恒压: "
+                         "有力=功率级OK; park 0 0 退出)\r\n",
+                         (double)VF_GetParkDeg(), (double)VF_GetParkV(),
+                         (double)cur_mag_filt, (double)Power);
+        return;
+    }
 
-/* ---------------------------------------------------------------------------
-   纯数字行: 每个采样周期一行, 逗号分隔, 直接喂 Excel / Python / 串口绘图, 无任何标签。
-   列序(t_ms,enc,hfi,err,L0,L1,sal,I,U,vdc):
-     enc : 磁编码器换算出的电角度 rad [0,2pi)
-     hfi : HFI 辨识出的电角度 rad [0,2pi)
-     err : enc - hfi, 归一化到 [-pi,pi)
-   凸极法只能给出模 pi 的轴(高电感轴), 这里的 hfi 用编码器在 ±pi/2 内选最近的一支,
-   只是为了把两条曲线画在一起; 若 err 基本恒定 -> 差值就是常数偏置; err 的波动 = 精度;
-   若 err 呈斜坡/镜像, 说明有速度滞后或符号问题。
---------------------------------------------------------------------------- */
-static void App_PrintHfiRow(void)
-{
-#if (HFI_FIX_PHI != 0u)
-    /* 诊断模式(见 HFI.h): 注入方向固定, 打印 HF 电流矢量的幅值与倾斜角。
-     *   tilt_pp = 2*atan(L1/L0): 手拨转子转, 它会摆动 -> 真凸极; 纹丝不动 -> 伪各向异性。
-     *   phi 恒为 0 是本模式生效的自检。 */
-    (void)CDC_Printf("%u,%.2f,%.2f,%.1f,%.1f,%.3f,%.2f,%.2f,%.3f\r\n",
-                     (unsigned)HAL_GetTick(),
-                     hfi_diag_tilt_ctr, hfi_diag_tilt_pp,
-                     hfi_diag_mag_ctr, hfi_diag_mag_pp,
-                     hfi_i_peak, hfi_u_inj, Power, hfi_phi);
-    return;
+#if (APP_SMO_ENABLE != 0)
+    (void)CDC_Printf("# OL t=%u v_out=%.2fV I=%.1fA |E|=%.2fV rpm_cmd=%.0f rpm_obs=%.0f "
+                     "vdc=%.1f %s%s%s | vlo=%.2f fres=%.1f fstart=%.1f prot=%u\r\n",
+                     (unsigned)now, (double)vf_v_out, (double)cur_mag_filt,
+                     (double)SMO.Output.Emf, (double)vf_speed_rpm,
+                     (double)SMO.Output.Rpm, (double)Power,
+                     (vf_aligned != 0u) ? "aligned " : "aligning ",
+                     (vf_running != 0u) ? "running " : "no-emf ",
+                     (vf_boost_lo_on != 0u) ? "boost_lo" : "curve",
+                     (double)VF_GetConfig()->v_boost_lo,
+                     (double)VF_GetConfig()->f_res,
+                     (double)VF_GetConfig()->f_start,
+                     (unsigned)VF_GetStallEnable());
 #else
-    float enc = Encoder_Elec_Angle;
-    float hfi = hfi_theta;
-    float err;
-    float sal = 0.0f;
-
-    if (hfi_l0 > 1.0e-5f) sal = hfi_l1 / hfi_l0 * 100.0f;
-
-    while (hfi < enc - 1.5707963268f) hfi += APP_PI;
-    while (hfi > enc + 1.5707963268f) hfi -= APP_PI;
-    while (hfi < 0.0f) hfi += APP_TWO_PI;
-    while (hfi >= APP_TWO_PI) hfi -= APP_TWO_PI;
-
-    err = enc - hfi;
-    while (err >= APP_PI) err -= APP_TWO_PI;
-    while (err < -APP_PI) err += APP_TWO_PI;
-
-    (void)CDC_Printf("%u,%.4f,%.4f,%.4f,%.4f,%.4f,%.2f,%.3f,%.2f,%.1f\r\n",
-                     (unsigned)HAL_GetTick(), enc, hfi, err,
-                     hfi_l0 * 1000.0f, hfi_l1 * 1000.0f, sal,
-                     hfi_i_peak, hfi_u_inj, Power);
+    (void)CDC_Printf("# OL t=%u v_out=%.2fV I=%.1fA rpm_cmd=%.0f vdc=%.1f | %s%s | "
+                     "vlo=%.2f fres=%.1f (SMO已关)\r\n",
+                     (unsigned)now, (double)vf_v_out, (double)cur_mag_filt,
+                     (double)vf_speed_rpm, (double)Power,
+                     (vf_aligned != 0u) ? "aligned " : "aligning ",
+                     (vf_boost_lo_on != 0u) ? "boost_lo" : "curve",
+                     (double)VF_GetConfig()->v_boost_lo,
+                     (double)VF_GetConfig()->f_res);
 #endif
 }
 
+/* --------------------------------------------------------------------------
+ * 中断内分段计时(诊断用)
+ *   40kHz 预算 25us, 必须知道每一段占多少才能真正优化, 不能靠猜。
+ *   开机后统计 2 秒各段最大耗时, 打印一次。
+ * ------------------------------------------------------------------------ */
+static uint32_t prof_smo;
+static uint32_t prof_vf;
+static uint8_t  prof_on = 1u;
+static uint32_t prof_ticks;
+
+#define PROF_CYC() (DWT->CYCCNT)
+#define PROF_CYC_US(c) ((float)(c) / (float)(SystemCoreClock / 1000000u))
+
+/* --------------------------------------------------------------------------
+ * 观测器抽取运行(降低中断耗时)
+ *
+ *   ★2026-10: 控制频率已改回 20kHz(预算 50us, 实测 33.16us, 余量 17us),
+ *     **不需要抽取了**, 所以这里改成 1 —— 观测器每拍(20kHz)运行。
+ *     抽取本来是 40kHz/25us 预算下的权宜之计, 而且抽取会引入额外延迟;
+ *     每拍运行最简单、最不容易出错。
+ *
+ *   若哪天又必须抽取(例如把频率提回 40kHz), 记住两件事:
+ *     ① 抽取后必须把观测周期告诉观测器(App_FOC_Init 里的 SMO_SetTs), 否则 F/G 全错;
+ *     ② 边界层 δ 必须随 Ts 等比放大(SMO.h 里有完整推导), 否则观测器发散。
+ *   抽取周期下"每拍电角度"别接近 180°(否则角度差折返、速度估计反号):
+ *     20kHz 抽取 8 = 2.5kHz 时, 6000rpm 才 101°, 还安全。
+ * ------------------------------------------------------------------------ */
+#define SMO_DECIM 1u
+
+#if (APP_SMO_ENABLE != 0)
+static uint8_t  smo_dec_cnt;
+static float    smo_ia_acc;
+static float    smo_ib_acc;
+
+static void App_SmoStep(void)
+{
+    /* 累积本抽取窗口的电流(抽取=1 时就是本拍值, 累积无副作用) */
+    smo_ia_acc += ialpha;
+    smo_ib_acc += ibeta;
+    smo_dec_cnt++;
+
+    if (smo_dec_cnt < SMO_DECIM) return;
+    {
+        float inv = 1.0f / (float)SMO_DECIM;
+        SMO.Input.Ialpha = smo_ia_acc * inv;
+        SMO.Input.Ibeat  = smo_ib_acc * inv;
+    }
+    smo_dec_cnt = 0u;
+    smo_ia_acc  = 0.0f;
+    smo_ib_acc  = 0.0f;
+    SMO.Output.ThetaEnc = Encoder_Elec_Angle;
+    SMO_Run(&SMO);
+}
+#endif  /* APP_SMO_ENABLE */
+
+/* --------------------------------------------------------------------------
+ * 开环 V/F 通路开关(0 = 回闭环电流环)
+ * ------------------------------------------------------------------------ */
+static void App_OpenLoopSet(uint8_t on)
+{
+    if (on != 0u)
+    {
+        VF_SetEnable(1u);
+        SMO_Reset();                 /* 观测器从头拉入, 避免带旧状态 */
+        Control_ResetCurrentPID();
+        Control_ResetSpeedPID();
+        Control_ResetPositionPID();
+        cur_id_ref = 0.0f;
+        cur_iq_ref = 0.0f;
+        cur_vd = 0.0f;
+        cur_vq = 0.0f;
+        speed_ref_cmd_rpm = 0.0f;
+        spd_err_rpm = 0.0f;
+        pos_err_rad = 0.0f;
+        vdc_fault = 0u;              /* 开环测试期间不因欠压反复封驱动 */
+        vdc_low_count = 0u;
+        (void)CDC_Printf("# open-loop ON\r\n");
+    }
+    else
+    {
+        VF_SetEnable(0u);
+        __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_1, 0u);
+        __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_2, 0u);
+        __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_3, 0u);
+        SMO_Reset();
+        (void)CDC_Printf("# open-loop OFF, driver=0\r\n");
+    }
+}
+
+static void App_SmoStreamSet(uint8_t on)
+{
+    smo_head = 0u;
+    smo_tail = 0u;
+    smo_dropped = 0u;
+    smo_last_us = App_NowUs();
+    smo_stream_on = (on != 0u) ? 1u : 0u;
+    if (smo_stream_on != 0u)
+    {
+        App_PrintStreamHeader();
+    }
+    else
+    {
+        (void)CDC_Printf("# stream off (drop=%u)\r\n", (unsigned)smo_dropped);
+    }
+}
+
+/* --------------------------------------------------------------------------
+ * 命令口
+ *   CAN(0x91, data[0] = 子命令, data[1..2] = int16 大端):
+ *     0x01 电流 iq(0.001A) / 0x02 转速 rpm / 0x03 位置
+ *     0x20 开环 V/F 开关(非0=开)      ★开环 = 驱动角自己积分, 不需要编码器
+ *     0x21 目标转速(电机侧 rpm)
+ *     0x22 V/F 斜率 V/Hz = 值×0.001
+ *     0x23 V/F 电压上限 V = 值×0.001
+ *     0x24 编码器模式下的转矩角 = 值×0.0001 rad
+ *     0x25 对照偏置 = 值×0.0001 rad
+ *     0x26 斜坡 rpm/s
+ *     0x27 观测器滞后补偿带宽 rad/s
+ *     0x28 驱动角来源(0=开环积分角 1=编码器角)
+ *     0x29 起步对齐电压 V = 值×0.001
+ *     0x30 SMO 打点流开关(非0=开)
+ *     0x40 打印状态(TIM1 自检 + 观测器 + V/F + 方向自检)
+ * ------------------------------------------------------------------------ */
 void BSP_CAN_RxCallback(const CAN_RxHeaderTypeDef *header, const uint8_t *data)
 {
     int16_t command;
@@ -264,53 +586,185 @@ void BSP_CAN_RxCallback(const CAN_RxHeaderTypeDef *header, const uint8_t *data)
     switch (data[0])
     {
         case 0x01u:
+            if (VF_IsEnabled()) App_OpenLoopSet(0u);
+            Control_SetCurrentTarget(0.0f, (float)command * 0.001f);
+            break;
         case 0x02u:
+            if (VF_IsEnabled()) App_OpenLoopSet(0u);
+            Control_SetSpeedTarget((float)command);
+            break;
         case 0x03u:
-            /* 发运动指令 = 要用电动机模式: 自动退出 HFI(否则电流环被旁路, 电机不会动) */
-            if (hfi_enable != 0u) HFI_SetEnable(0u);
-            if (data[0] == 0x01u)
-            {
-                Control_SetCurrentTarget(0.0f, (float)command * 0.001f);
-            }
-            else if (data[0] == 0x02u)
-            {
-                Control_SetSpeedTarget((float)command);
-            }
-            else
-            {
-                Control_SetPositionTarget((float)command *
-                                           APP_CAN_RAW_TO_POSITION);
-            }
+            if (VF_IsEnabled()) App_OpenLoopSet(0u);
+            Control_SetPositionTarget((float)command * APP_CAN_RAW_TO_POSITION);
             break;
-        case 0x10u:  /* HFI 注入开关: 非 0 = 使能并解除过流封锁 */
-            if (command != 0)
-            {
-                hfi_trip = 0u;
-                HAL_GPIO_WritePin(EN_Gate_GPIO_Port, EN_Gate_Pin, GPIO_PIN_SET);
-                HFI_SetEnable(1u);
-            }
-            else
-            {
-                HFI_SetEnable(0u);
-            }
+        case 0x20u:  /* 开环 V/F 开关 */
+            App_OpenLoopSet((command != 0) ? 1u : 0u);
             break;
-        case 0x11u:  /* HFI 注入幅值 mV */
-            HFI_SetUInj((float)command * 0.001f);
+        case 0x21u:  /* 目标转速(电机侧 rpm) */
+            VF_SetTargetRPM((float)command);
             break;
-        case 0x15u:  /* 观测定角开关: 非 0 = 允许高速自动切到观测角 */
-            obs_angle_en = (command != 0) ? 1u : 0u;
+        case 0x22u:  /* 斜率 V/Hz ×1000 */
+            VF_SetVSlope((float)command * 0.001f);
             break;
-        case 0x16u:  /* 观测定角切换阈值(电机侧 rpm) */
-            if (command > 0)
-            {
-                obs_switch_rpm = (float)command;
-            }
+        case 0x23u:  /* 电压上限 V ×1000 */
+            VF_SetVMax((float)command * 0.001f);
             break;
-        case 0x17u:  /* 观测角常数偏置 mrad */
-            obs_ang_off = (float)command * 0.001f;
+        case 0x24u:  /* 转矩角: 值×0.0001 rad(π=31416, int16 放得下) */
+            VF_SetTorqueAngle((float)command * 0.0001f);
+            break;
+        case 0x25u:  /* 对照偏置: 值×0.0001 rad */
+            obs_angle_off = (float)command * 0.0001f;
+            break;
+        case 0x26u:  /* 斜坡 rpm/s */
+            VF_SetRamp((float)command);
+            break;
+        case 0x27u:  /* 滞后补偿等效带宽 rad/s */
+            SMO_SetLagW((float)command);
+            break;
+        case 0x28u:  /* 驱动角来源: 0=开环积分角(无编码器) 1=编码器角 */
+            VF_SetDriveMode((command != 0) ? VF_DRV_ENCODER : VF_DRV_OPENLOOP);
+            break;
+        case 0x29u:  /* 起步对齐电压 V ×1000 */
+            VF_SetVAlign((float)command * 0.001f);
+            break;
+        case 0x2Au:  /* 低频强制启动电压 V ×1000(解决起步堵转) */
+            VF_SetVBoostLo((float)command * 0.001f);
+            break;
+        case 0x2Bu:  /* 低频强制段上界电频率 Hz ×100 */
+            VF_SetFRes((float)command * 0.01f);
+            break;
+        case 0x2Cu:  /* 失步保护开关: 0=关(台架调试用) */
+            VF_SetStallEnable((command != 0) ? 1u : 0u);
+            break;
+        case 0x30u:  /* 打点流开关 */
+            App_SmoStreamSet((command != 0) ? 1u : 0u);
+            break;
+        case 0x40u:  /* 打印状态 */
+            App_PrintStatus();
             break;
         default:
             break;
+    }
+}
+
+/* --------------------------------------------------------------------------
+ * USB 文本命令: 串口里直接敲, 不用 CAN 盒
+ *   vf <rpm>        进开环, 目标转速(电机侧 rpm), 例: vf 1500
+ *   vf              只进开环, 不改目标
+ *   stop            退出开环, 驱动封零
+ *   cur <A>         电流模式(闭环)
+ *   spd <rpm>       速度模式(闭环)
+ *   slope <V/Hz> / vmax <V> / vboost <V> / ramp <rpm/s> / angle <rad> / off <rad>
+ *   gain <V> / delta <A>        滑模增益 / 边界层
+ *   stream <0|1>    打点流开关
+ *   stat            打印状态
+ *   help            帮助
+ * ------------------------------------------------------------------------ */
+static void App_UsbCommand(const char *line)
+{
+    char cmd[16] = {0};
+    float value = 0.0f;
+    int n = sscanf(line, "%15s %f", cmd, &value);
+
+    if (n <= 0) return;
+
+    if (strcmp(cmd, "vf") == 0)
+    {
+        if (n >= 2) VF_SetTargetRPM(value);
+        App_OpenLoopSet(1u);
+        App_PrintStatus();
+    }
+    else if (strcmp(cmd, "stop") == 0)   { App_OpenLoopSet(0u); }
+    else if (strcmp(cmd, "cur") == 0)
+    {
+        if (VF_IsEnabled()) App_OpenLoopSet(0u);
+        Control_SetCurrentTarget(0.0f, value);
+        (void)CDC_Printf("# current mode iq=%.2f A\r\n", (double)value);
+    }
+    else if (strcmp(cmd, "spd") == 0)
+    {
+        if (VF_IsEnabled()) App_OpenLoopSet(0u);
+        Control_SetSpeedTarget(value);
+        (void)CDC_Printf("# speed mode rpm=%.0f\r\n", (double)value);
+    }
+    else if (strcmp(cmd, "slope") == 0)   { VF_SetVSlope(value);      App_PrintStatus(); }
+    else if (strcmp(cmd, "vmax") == 0)    { VF_SetVMax(value);        App_PrintStatus(); }
+    else if (strcmp(cmd, "vboost") == 0)  { VF_SetVBoost(value);      App_PrintStatus(); }
+    else if (strcmp(cmd, "ramp") == 0)    { VF_SetRamp(value);        App_PrintStatus(); }
+    else if (strcmp(cmd, "angle") == 0)   { VF_SetTorqueAngle(value); App_PrintStatus(); }
+    else if (strcmp(cmd, "off") == 0)     { obs_angle_off = value;    App_PrintStatus(); }
+    else if (strcmp(cmd, "lag") == 0)     { SMO_SetLagW(value);       App_PrintStatus(); }
+    else if (strcmp(cmd, "drv") == 0)     { VF_SetDriveMode((value != 0.0f) ? VF_DRV_ENCODER : VF_DRV_OPENLOOP); App_PrintStatus(); }
+    else if (strcmp(cmd, "fstart") == 0)  { VF_SetFStart(value);      App_PrintStatus(); }
+    else if (strcmp(cmd, "valign") == 0)  { VF_SetVAlign(value);      App_PrintStatus(); }
+    else if (strcmp(cmd, "vlo") == 0)     { VF_SetVBoostLo(value);    App_PrintStatus(); }
+    else if (strcmp(cmd, "fres") == 0)    { VF_SetFRes(value);        App_PrintStatus(); }
+    else if (strcmp(cmd, "prot") == 0)    { VF_SetStallEnable((value != 0.0f) ? 1u : 0u); App_PrintStatus(); }
+    else if (strcmp(cmd, "park") == 0)
+    {
+        /* park <角度deg> <电压V>: 固定角加恒压, 转子会吸在该角度上。
+         *   用来验证驱动/接线: 有力=功率级正常; 没感觉=驱动或接线有问题。
+         *   park 0 0 退出。★会持续通电发热, 用完记得退! */
+        char cmd2[16] = {0};
+        float volts = 0.0f;
+        int n2 = sscanf(line, "%15s %f %f", cmd2, &value, &volts);
+        if (n2 >= 3)
+        {
+            VF_SetPark(value, volts);
+            (void)CDC_Printf("# park: angle=%.1fdeg V=%.2fV (转子会被吸到该角度; park 0 0 退出)\r\n",
+                             (double)value, (double)volts);
+        }
+        else
+        {
+            VF_SetPark(0.0f, 0.0f);
+            (void)CDC_Printf("# park OFF\r\n");
+        }
+    }
+    else if (strcmp(cmd, "gain") == 0)    { SMO_SetGain(value);       App_PrintStatus(); }
+    else if (strcmp(cmd, "delta") == 0)   { SMO_SetBoundary(value);   App_PrintStatus(); }
+    else if (strcmp(cmd, "stream") == 0)  { App_SmoStreamSet((value != 0.0f) ? 1u : 0u); }
+    else if (strcmp(cmd, "stat") == 0)    { App_PrintStatus(); }
+    else if (strcmp(cmd, "help") == 0)
+    {
+        (void)CDC_Printf("# vf <rpm> | stop | cur <A> | spd <rpm> | "
+                         "slope <V/Hz> | vmax <V> | vboost <V> | vlo <V> | fres <Hz> | "
+                         "ramp <rpm/s> | fstart <Hz> | valign <V> | drv <0|1> | prot <0|1> | "
+                         "park <deg> <V> | angle <rad> | "
+                         "off <rad> | lag <rad/s> | gain <V> | delta <A> | stream <0|1> | stat | help\r\n");
+    }
+    else
+    {
+        (void)CDC_Printf("# unknown cmd '%s', try help\r\n", cmd);
+    }
+}
+
+/* CDC 收到的字节累积成行, 1ms 轮询一次解析 */
+static char usb_line[64];
+static uint8_t usb_line_len;
+
+static void App_UsbPoll(void)
+{
+    uint8_t chunk[32];
+    uint32_t len = CDC_RxTake(chunk, (uint16_t)sizeof(chunk));
+
+    for (uint32_t i = 0u; i < len; i++)
+    {
+        char c = (char)chunk[i];
+
+        if (c == '\n' || c == '\r')
+        {
+            usb_line[usb_line_len] = '\0';
+            if (usb_line_len > 0u) App_UsbCommand(usb_line);
+            usb_line_len = 0u;
+        }
+        else if (usb_line_len < (uint8_t)(sizeof(usb_line) - 1u))
+        {
+            usb_line[usb_line_len++] = c;
+        }
+        else
+        {
+            usb_line_len = 0u;   /* 一行太长, 丢弃 */
+        }
     }
 }
 
@@ -419,31 +873,6 @@ static uint8_t App_ProtectionActive(void)
     return 1u;
 }
 
-/* HFI 过流封锁: 撤注入 + 关驱动, 需 CAN 0x10 重新使能 */
-static void App_HfiTrip(void)
-{
-    __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_1, 0u);
-    __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_2, 0u);
-    __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_3, 0u);
-    HAL_GPIO_WritePin(EN_Gate_GPIO_Port, EN_Gate_Pin, GPIO_PIN_RESET);
-    HFI_SetEnable(0u);
-    cur_id_ref = 0.0f;
-    cur_iq_ref = 0.0f;
-}
-
-/* 反电动势低通的相位滞后补偿量 = atan(we/omega_c), 带符号(反转自动反号)。
- *   用有理逼近代替 atanf: ISR 每拍都要算, 逼近式只要几次乘加(误差 <0.002rad)。
- *   12V 台架上 we/omega_c 最大约 0.95(<1), 超出按 1 截断(连续, 不会跳变)。 */
-static float Obs_EmfLag(float we)
-{
-    float a = we / OBS_EMF_WC;
-    float s = (a < 0.0f) ? -1.0f : 1.0f;
-    float m = fabsf(a);
-
-    if (m > 1.0f) m = 1.0f;
-    return s * (0.7853982f * m - m * (m - 1.0f) * (0.2447f + 0.0663f * m));
-}
-
 static void App_CurrentLoopTick(float vdc, float theta_elec)
 {
     Control_Mode_t mode;
@@ -454,26 +883,6 @@ static void App_CurrentLoopTick(float vdc, float theta_elec)
     {
         return;
     }
-
-    /* HFI 实验模式: 只做高频注入, 电流/速度/位置环全部旁路, 不输出转矩 */
-    if (hfi_enable != 0u)
-    {
-        HFI_Tick(ialpha, ibeta, vdc);
-        if (hfi_fault != HFI_FAULT_NONE)
-        {
-            hfi_trip = 1u;
-            App_HfiTrip();
-        }
-        return;
-    }
-    if (hfi_trip != 0u)
-    {
-        App_HfiTrip();
-        return;
-    }
-
-    /* 控制角: 编码器角 与 观测角 按 ramp 平滑交接(在下面的观测器接口位更新) */
-    theta_elec = theta_ctrl;
 
     mode = Control_GetMode();
     if (mode != previous_mode)
@@ -527,58 +936,8 @@ static void App_CurrentLoopTick(float vdc, float theta_elec)
         uint16_t ccr2;
         uint16_t ccr3;
         DeParkTransformer(&valpha, &vbeta, theta_elec, cur_vq, cur_vd);
-        /* ===== 观测器 + PLL + 观测定角 =====
-         * 只在 HFI 关闭时跑(HFI 开着时电压是纯注入, 平均为 0, 观测器没有可用模型)。 */
-        if (hfi_enable == 0u)
-        {
-            float rpm_e, thr, dth, step;
-            uint8_t obs_ok;
-
-            /* ---- 观测器(唯一入口, 见 App_ObserverStep) ---- */
-            obs_ok = App_ObserverStep(ialpha, ibeta, valpha, vbeta);
-
-            /* 电机侧 rpm(由电角速度换算): rpm = ωe / 极对数 × 60/2π */
-            rpm_e = PLL_GetOmega(&smo_pll) * 60.0f /
-                    (APP_TWO_PI * (float)FOC_POLE_PAIRS);
-
-            /* 切换判据: 使能 + 反电动势有效 + 转速过阈值(带回差), 否则斜坡退回 */
-            thr = (obs_ramp > 0.5f) ? (obs_switch_rpm - OBS_SWITCH_HYST)
-                                    :  obs_switch_rpm;
-            step = FOC_TS / OBS_RAMP_TIME_S;
-            if ((obs_angle_en != 0u) && (obs_ok != 0u) &&
-                (fabsf(rpm_e) > thr))
-            {
-                if (obs_arm_cnt < OBS_ARM_TICKS) obs_arm_cnt++;
-            }
-            else
-            {
-                obs_arm_cnt = 0u;
-            }
-            if (obs_arm_cnt >= OBS_ARM_TICKS)
-            {
-                obs_ramp += step;
-                if (obs_ramp > 1.0f) obs_ramp = 1.0f;
-            }
-            else
-            {
-                obs_ramp -= step;
-                if (obs_ramp < 0.0f) obs_ramp = 0.0f;
-            }
-
-            /* 控制角 = 编码器角 + ramp·[(观测角+偏置) − 编码器角]
-             *   ramp=1 时恒等于 观测角+偏置, 与编码器无关(真正的 sensorless) */
-            if (theta_ctrl_init == 0u)
-            {
-                theta_ctrl = Encoder_Elec_Angle;
-                theta_ctrl_init = 1u;
-            }
-            dth = obs_cmd_theta - Encoder_Elec_Angle;
-            while (dth >=  APP_PI) dth -= APP_TWO_PI;
-            while (dth <  -APP_PI) dth += APP_TWO_PI;
-            theta_ctrl = Encoder_Elec_Angle + obs_ramp * dth;
-            while (theta_ctrl >= APP_TWO_PI) theta_ctrl -= APP_TWO_PI;
-            while (theta_ctrl <  0.0f)        theta_ctrl += APP_TWO_PI;
-        }
+        SMO.Input.Valpha = valpha;
+        SMO.Input.Vbeta = vbeta;
         SVPWM(valpha, vbeta, vdc, &ccr1, &ccr2, &ccr3);
         __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_1, ccr1);
         __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_2, ccr2);
@@ -586,40 +945,12 @@ static void App_CurrentLoopTick(float vdc, float theta_elec)
     }
 }
 
-/* ============================================================================
- * 观测器接口 —— 每拍调用一次, 这是"换观测器只改这里"的唯一入口
- *
- *   输入: ia, ib  本拍 αβ 电流 (A)
- *         va, vb  本拍 αβ 指令电压 (V, 不含任何注入)
- *   输出: 写全局 obs_cmd_theta —— 电角度, 已含相位补偿与常数偏置
- *   返回: 1 = 本拍角度有效;  0 = 无效(调用方保持上一次的值)
- *
- *   ★下面这段 SMO + PLL 只是参考实现, 可以整段替换成你自己的观测器;
- *     唯一约定就是"吃 ialpha/ibeta/valpha/vbeta, 吐 obs_cmd_theta"。
- * ========================================================================== */
-static uint8_t App_ObserverStep(float ia, float ib, float va, float vb)
-{
-    float e_sq;
-
-    SMO_Update(&smo_obs, ia, ib, va, vb);
-    e_sq = smo_obs.E_alpha * smo_obs.E_alpha +
-           smo_obs.E_beta  * smo_obs.E_beta;
-    if (e_sq <= OBS_EMF_MIN_SQ)
-    {
-        return 0u;                    /* |E| 太小, 角度不可信: 不更新 */
-    }
-    PLL_Step(&smo_pll, smo_obs.theta_e);
-
-    /* PLL 角 + 反电动势低通相位滞后补偿 + 常数偏置 */
-    obs_cmd_theta = PLL_GetTheta(&smo_pll)
-                  + Obs_EmfLag(PLL_GetOmega(&smo_pll))
-                  + obs_ang_off;
-    return 1u;
-}
-
-/* 三相电流同源后执行的统一处理(原 ADC1 分支内容) */
+/* 三相电流同源后执行的统一处理 */
 static void App_AdcStep(void)
 {
+    uint32_t cyc_isr0 = PROF_CYC();     /* 本拍起点, 用于统计超预算次数 */
+    uint32_t now_us = App_NowUs();
+
     /* 原始值 -> 工程量(中断只搬原始值, 换算是应用层的事) */
     ADC_Voltage[0] = BSP_AdcRaw_PhaseV[0];
     ADC_Voltage[1] = BSP_AdcRaw_PhaseV[1];
@@ -631,6 +962,11 @@ static void App_AdcStep(void)
     ADC_Current[2] = BSP_AdcRaw_Current[2];
     ADC_Power = BSP_AdcRaw_Power;
     ADC_Temp  = BSP_AdcRaw_Temp;
+    prof_ticks_total++;
+    {   /* 每拍量一次中断本体耗时: 超过预算就是丢拍的直接证据 */
+        uint32_t cyc_now = PROF_CYC() - cyc_isr0;
+        if (cyc_now > (SystemCoreClock / APP_CTRL_HZ)) isr_over_cnt++;
+    }
     Voltage[0] = (float)ADC_Voltage[0] * APP_ADC_VOLT_SCALE * APP_PHASE_VOLT_DIVIDER;
     Voltage[1] = (float)ADC_Voltage[1] * APP_ADC_VOLT_SCALE * APP_PHASE_VOLT_DIVIDER;
     Voltage[2] = (float)ADC_Voltage[2] * APP_ADC_VOLT_SCALE * APP_PHASE_VOLT_DIVIDER;
@@ -666,7 +1002,81 @@ static void App_AdcStep(void)
     ParkTransformer(ialpha, ibeta, Encoder_Elec_Angle, &iq, &id);
     id_filt = App_FilterCurrent(&id_filter, id);
     iq_filt = App_FilterCurrent(&iq_filter, iq);
-    App_CurrentLoopTick(Power, Encoder_Elec_Angle);
+
+    /* ---- 观测器: 抽取运行(见 App_SmoStep) ----
+     *   ★APP_SMO_ENABLE=0 时整段跳过: 开环驱动角是积分角, 本来就不需要观测器,
+     *     先去掉它把出问题的面缩到最小(失步保护也随之失效, 注意别长时间堵转)。 */
+#if (APP_SMO_ENABLE != 0)
+    {
+        uint32_t c0 = PROF_CYC();
+        App_SmoStep();
+        if (prof_on != 0u)
+        {
+            uint32_t d = PROF_CYC() - c0;
+            if (d > prof_smo) prof_smo = d;
+        }
+    }
+#endif
+
+    /* ---- 控制通路: 开环 V/F(自己积分驱动角, 不需要编码器) 或闭环电流环 ---- */
+    if (VF_IsEnabled() != 0u)
+    {
+        uint32_t c0 = PROF_CYC();
+
+#if (APP_SMO_ENABLE != 0)
+        VF_SetObsFeedback(SMO.Output.Emf, SMO.Output.Rpm);
+#endif
+        VF_Tick(Power, Encoder_Elec_Angle);
+        if (prof_on != 0u)
+        {
+            uint32_t d = PROF_CYC() - c0;
+            if (d > prof_vf) prof_vf = d;
+        }
+#if (APP_SMO_ENABLE != 0)
+        /* 失步/堵转: 电压已加但迟迟没有反电动势 -> 封驱动, 免堵转烧电机。
+         *   ★只认"本拍 VF 刚置上的"失步标志, 并且封完就把它清掉 ——
+         *     否则标志一直挂着, 后面每次 vf 都会在下一拍被立刻封死(表现为"完全不转")。 */
+        if (vf_stall != 0u)
+        {
+            if (vdc_fault == 0u)
+            {
+                __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_1, 0u);
+                __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_2, 0u);
+                __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_3, 0u);
+                HAL_GPIO_WritePin(EN_Gate_GPIO_Port, EN_Gate_Pin, GPIO_PIN_RESET);
+            }
+            VF_SetEnable(0u);
+            vf_stall = 0u;
+            vdc_fault = 0u;
+        }
+#endif
+    }
+    else
+    {
+        App_CurrentLoopTick(Power, Encoder_Elec_Angle);
+    }
+
+    /* 下一拍给观测器用的电压(本拍真正施加的电压) */
+    SMO.Input.Valpha = vf_valpha;
+    SMO.Input.Vbeta  = vf_vbeta;
+
+    /* 方向自检: 只有在编码器有效时才有意义(无编码器时编码器角是噪声, 会误判) */
+    if (SMO.Output.Valid != 0u && Encoder_IsValid() != 0u)
+    {
+        float d_obs = App_AngleDiff(SMO.Output.Theta, smo_theta_prev_isr);
+        float d_enc = App_AngleDiff(Encoder_Elec_Angle, SMO.Output.ThetaEnc);
+
+        if (fabsf(d_enc) > 0.05f)
+        {
+            if ((d_obs >= 0.0f) == (d_enc >= 0.0f)) smo_dir_ok++;
+            else                                     smo_dir_bad++;
+        }
+    }
+    smo_theta_prev_isr = SMO.Output.Theta;
+
+    /* 打点: 1kHz 降采样 */
+    App_SmoStreamTick(HAL_GetTick(), now_us);
+
     HAL_GPIO_WritePin(LED_Red_GPIO_Port, LED_Red_Pin,
                       (HAL_GPIO_ReadPin(FAULT_GPIO_Port, FAULT_Pin) == GPIO_PIN_RESET) ?
                       GPIO_PIN_SET : GPIO_PIN_RESET);
@@ -675,6 +1085,47 @@ static void App_AdcStep(void)
         HAL_GPIO_TogglePin(LED_Green_GPIO_Port, LED_Green_Pin);
         heartbeat_ms = HAL_GetTick();
     }
+}
+
+static void App_PrintStatus(void)
+{
+    (void)CDC_Printf("# mode=%s rpm_cmd=%.0f rpm_meas=%.0f |E|=%.2f th_obs=%+.3f th_enc=%+.3f "
+                     "err=%+.3f rpm_obs=%.0f vdc=%.1f iq=%.2f I=%.2f "
+                     "slope=%.3f vmax=%.2f vboost=%.2f fstart=%.2f valign=%.2f ramp=%.0f "
+                     "k=%.0f delta=%.1f lagw=%.0f off=%+.3f lag=%+.3f stream=%u\r\n",
+                     (VF_IsEnabled() == 0u) ? "FOC-CLOSED"
+                        : ((VF_GetDriveMode() == VF_DRV_ENCODER) ? "VF-enc" : "VF-open"),
+                     (double)VF_GetTargetRPM(), (double)vf_speed_meas_rpm,
+                     (double)SMO.Output.Emf, (double)SMO.Output.Theta,
+                     (double)SMO.Output.ThetaEnc,
+                     (double)App_AngleDiff(App_ObsCompensated(),
+                                           SMO.Output.ThetaEnc),
+                     (double)SMO.Output.Rpm, (double)Power, (double)iq_filt,
+                     (double)cur_mag_filt,
+                     (double)VF_GetConfig()->v_slope, (double)VF_GetConfig()->v_max,
+                     (double)VF_GetConfig()->v_boost,
+                     (double)VF_GetConfig()->f_start,
+                     (double)VF_GetConfig()->v_align,
+                     (double)VF_GetConfig()->rpm_ramp,
+                     (double)SMO_GetGain(), (double)SMO_GetBoundary(),
+                     (double)SMO_GetLagW(),
+                     (double)obs_angle_off, (double)SMO.Output.Lag,
+                     (unsigned)smo_stream_on);
+    /* TIM1 自检: CEN 必须为 1, CC1E/2E/3E/4E 必须都置位, 否则 PWM/ADC 触发是死的 */
+    (void)CDC_Printf("# tim1 CR1=0x%04X CCER=0x%04X ARR=%u CCR4=%u drv=%u vdc_fault=%u usb_drop=%u\r\n",
+                     (unsigned)TIM1->CR1, (unsigned)TIM1->CCER,
+                     (unsigned)TIM1->ARR, (unsigned)TIM1->CCR4,
+                     (unsigned)((HAL_GPIO_ReadPin(FAULT_GPIO_Port, FAULT_Pin) == GPIO_PIN_RESET) ? 1u : 0u),
+                     (unsigned)vdc_fault, (unsigned)CDC_RxDropped());
+    /* 方向自检: dir_bad 明显多于 dir_ok 说明观测角是镜像形式(见 SMO.c 第 6 步注释);
+     *   开环(无编码器)模式下没有编码器真值, 这里恒为"数据不足" */
+    (void)CDC_Printf("# smo_dir ok=%u bad=%u -> %s\r\n",
+                     (unsigned)smo_dir_ok, (unsigned)smo_dir_bad,
+                     (Encoder_IsValid() == 0u)
+                         ? "无编码器, 不判定(开环模式属正常)"
+                         : ((smo_dir_bad > smo_dir_ok + 8u)
+                                ? "★符号口径反了(dθ̂/dθ=-1): 把 SMO.c 的角度提取改成 atan2(+e_alpha, e_beta)"
+                                : ((smo_dir_ok > 8u) ? "OK(观测角与编码器同向)" : "数据不足, 让电机转起来再看")));
 }
 
 void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
@@ -699,15 +1150,14 @@ void App_FOC_Init(void)
                             APP_POSITION_PID_ILIMIT);
     Control_SetSpeedLoop(1u);
     Encoder_Init();
-    SMO_Init(&smo_obs, FOC_RS, FOC_LS, FOC_TS);
-    PLL_Init(&smo_pll, OBS_PLL_FN_HZ, OBS_PLL_ZETA, FOC_TS, OBS_PLL_WMAX);
-    theta_ctrl = 0.0f;
-    obs_ramp = 0.0f;
-    obs_ang_off = OBS_ANGLE_OFF_DEF;
-    obs_switch_rpm = OBS_SWITCH_RPM;
-    obs_angle_en = OBS_ANGLE_EN_DEF;
-    obs_arm_cnt = 0u;
-    theta_ctrl_init = 0u;
+    /* DWT 周期计数器: 打点时间戳 + 中断耗时统计(40kHz 下必须远小于 25us) */
+    CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;
+    DWT->CYCCNT = 0u;
+    DWT->CTRL |= DWT_CTRL_CYCCNTENA_Msk;
+    /* ★观测器抽取运行: 必须先告诉它抽取后的周期(Ts), 再 Init 计算 F/G */
+    SMO_SetTs((float)SMO_DECIM / (float)APP_CTRL_HZ);
+    SMO_Init();
+    VF_Init();
     if (BSP_CAN_Init() != HAL_OK)
     {
         Error_Handler();
@@ -733,17 +1183,15 @@ void App_FOC_Init(void)
     }
     HAL_GPIO_WritePin(EN_Gate_GPIO_Port, EN_Gate_Pin, GPIO_PIN_SET);
 
-    /* DWT 周期计数器: 用来量控制中断本体耗时(40kHz 下必须远小于 25us) */
-    CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;
-    DWT->CYCCNT = 0u;
-    DWT->CTRL |= DWT_CTRL_CYCCNTENA_Msk;
-
-    /* HFI 实验: 必须在 CSA 零点标定完成之后再启动注入 */
-    HFI_Init();
-    if (HFI_AUTO_START != 0u)
-    {
-        HFI_SetEnable(1u);
-    }
+    (void)CDC_Printf("# boot: SMO k=%.1f delta=%.1f alpha=%.3f lagw=%.0f | VF default "
+                     "drv=%s rpm=%.0f ramp=%.0f slope=%.3f vmax=%.2f vboost=%.2f fstart=%.2f valign=%.2f\r\n",
+                     (double)SMO_GetGain(), (double)SMO_GetBoundary(),
+                     (double)SMO_EMF_LPF_ALPHA, (double)SMO_GetLagW(),
+                     (VF_GetDriveMode() == VF_DRV_ENCODER) ? "encoder" : "openloop",
+                     (double)OL_RPM_DEF, (double)OL_RAMP_DEF,
+                     (double)OL_VSLOPE_DEF, (double)OL_VMAX_DEF,
+                     (double)OL_VBOOST_DEF, (double)OL_FSTART_DEF, (double)OL_VALIGN_DEF);
+    (void)CDC_Printf("# commands: vf <rpm> | stop | cur <A> | spd <rpm> | stream 1 | stat | help\r\n");
 }
 
 void App_FOC_MainLoop(void)
@@ -753,6 +1201,10 @@ void App_FOC_MainLoop(void)
         can_feedback_ms = HAL_GetTick();
         App_SendCanFeedback();
     }
+    App_UsbPoll();
+    App_SmoStreamDrain();
+    App_PrintSmoStat();
+    App_PrintOpenLoopLive();
     if (isr_cyc_reported == 0u && HAL_GetTick() >= 3000u)
     {
         isr_cyc_reported = 1u;
@@ -762,35 +1214,27 @@ void App_FOC_MainLoop(void)
                          1.0e6f / (float)APP_CTRL_HZ,
                          (unsigned)APP_CTRL_HZ);
     }
-    if (hfi_enable != 0u || hfi_trip != 0u)
+    /* 中断分段耗时(开机 2 秒后打一次): 谁在吃预算一目了然 */
+    if (prof_on != 0u && HAL_GetTick() >= 2000u)
     {
-        if (HAL_GetTick() - hfi_debug_ms >= HFI_PRINT_MS)
+        prof_on = 0u;
         {
-            hfi_debug_ms = HAL_GetTick();
-            if (hfi_trip != 0u || hfi_fault != HFI_FAULT_NONE ||
-                hfi_probe != 0u ||
-                HAL_GPIO_ReadPin(FAULT_GPIO_Port, FAULT_Pin) == GPIO_PIN_RESET)
-            {
-                App_PrintHfiDebug();      /* 异常/探针期间: 带标签整行, 便于诊断 */
-            }
-            else
-            {
-                if (hfi_hdr_done == 0u)   /* 首行前打印一次列名( # 开头 ) */
-                {
-                    hfi_hdr_done = 1u;
-#if (HFI_FIX_PHI != 0u)
-                    (void)CDC_Printf("# t_ms,tilt_ctr(deg),tilt_pp(deg),mag_ctr(mA),"
-                                     "mag_pp(mA),Ipk(A),U(V),vdc(V),phi(rad)\r\n");
-                    (void)CDC_Printf("# HFI diag: phi=0(alpha), U=%.2fV, win=%ums | "
-                                     "tilt_pp=2*atan(L1/L0); 手转转子看 tilt_pp 是否变化\r\n",
-                                     hfi_u_inj, (unsigned)HFI_DIAG_PRINT_MS);
-#else
-                    (void)CDC_Printf("# t_ms,enc,hfi,err,L0(mH),L1(mH),sal(%),"
-                                     "I(A),U(V),vdc(V)\r\n");
-#endif
-                }
-                App_PrintHfiRow();        /* 正常: 纯数字 */
-            }
+            uint32_t total = BSP_AdcIrq_GetMaxCycle();
+            uint32_t cyc100 = SystemCoreClock / 1000000u;
+
+            (void)CDC_Printf("# prof(2s内峰值): total=%.2fus | smo=%.2fus vf=%.2fus | "
+                             "其余(采样/滤波/Park/打印)=%.2fus | 预算=%.2fus\r\n",
+                             (float)total / (float)cyc100,
+                             (float)prof_smo / (float)cyc100,
+                             (float)prof_vf / (float)cyc100,
+                             (float)(total > prof_smo + prof_vf
+                                     ? total - prof_smo - prof_vf : 0u) / (float)cyc100,
+                             1.0e6f / (float)APP_CTRL_HZ);
+            (void)CDC_Printf("# prof 占比: smo=%.0f%% vf=%.0f%% 其余=%.0f%% (总 %u 拍)\r\n",
+                             100.0f * (float)prof_smo / (float)total,
+                             100.0f * (float)prof_vf / (float)total,
+                             100.0f * (float)(total - prof_smo - prof_vf) / (float)total,
+                             (unsigned)prof_ticks);
         }
     }
     /* 母线欠压故障事件: 一触发就封驱动 -> 电机不转, 这里明确打出来 */
@@ -799,36 +1243,10 @@ void App_FOC_MainLoop(void)
         if (vdc_fault != vdc_fault_prev)
         {
             vdc_fault_prev = vdc_fault;
-            (void)CDC_Printf("# vdc_fault=%u vdc=%.2f V (阈值 %.1f/%.1f) trip=%u drv=%u\r\n",
-                             (unsigned)vdc_fault, Power, APP_VDC_MIN, APP_VDC_RECOVER,
-                             (unsigned)hfi_trip,
+            (void)CDC_Printf("# vdc_fault=%u vdc=%.2f V (阈值 %.1f/%.1f) drv=%u\r\n",
+                             (unsigned)vdc_fault, (double)Power,
+                             (double)APP_VDC_MIN, (double)APP_VDC_RECOVER,
                              (unsigned)((HAL_GPIO_ReadPin(FAULT_GPIO_Port, FAULT_Pin) == GPIO_PIN_RESET) ? 1u : 0u));
-        }
-    }
-    /* 观测器诊断输出(仅 HFI 关闭时): 纯数字, 逗号分隔
-       列: t_ms, enc, smo_theta, cmd_theta, err, pll_omega, E(V), vdc, ramp */
-    if (hfi_enable == 0u && HAL_GetTick() - obs_debug_ms >= 50u)
-    {
-        obs_debug_ms = HAL_GetTick();
-        if (obs_hdr_done == 0u)
-        {
-            obs_hdr_done = 1u;
-            (void)CDC_Printf("# t_ms,enc,smo_theta,cmd_theta,err,pll_omega,E(V),vdc(V),ramp\r\n");
-        }
-        {
-            float obs_err = Encoder_Elec_Angle - obs_cmd_theta;
-            while (obs_err >=  APP_PI) obs_err -= APP_TWO_PI;
-            while (obs_err <  -APP_PI) obs_err += APP_TWO_PI;
-            (void)CDC_Printf("%u,%.4f,%.4f,%.4f,%.4f,%.1f,%.3f,%.1f,%.2f\r\n",
-                             (unsigned)HAL_GetTick(),
-                             Encoder_Elec_Angle,
-                             smo_obs.theta_e,
-                             obs_cmd_theta,
-                             obs_err,
-                             PLL_GetOmega(&smo_pll),
-                             sqrtf(smo_obs.E_alpha * smo_obs.E_alpha +
-                                   smo_obs.E_beta  * smo_obs.E_beta),
-                             Power, obs_ramp);
         }
     }
     HAL_Delay(1u);
