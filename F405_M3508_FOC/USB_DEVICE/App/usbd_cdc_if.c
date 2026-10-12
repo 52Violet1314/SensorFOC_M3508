@@ -24,6 +24,7 @@
 /* USER CODE BEGIN INCLUDE */
 #include <stdio.h>
 #include <stdarg.h>
+#include "main.h"      /* HAL_GetTick (CDC_PrintfBlocking 里等端点用) */
 /* USER CODE END INCLUDE */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -95,6 +96,19 @@ uint8_t UserRxBufferFS[APP_RX_DATA_SIZE];
 uint8_t UserTxBufferFS[APP_TX_DATA_SIZE];
 
 /* USER CODE BEGIN PRIVATE_VARIABLES */
+
+/* ---------------------------------------------------------------------------
+ * 接收环形缓冲: USB 中断(CDC_Receive_FS)写, 主循环用 CDC_RxTake() 取。
+ *   只服务于"标定命令"这一件事(cal / lut / stat), 所以做得尽可能小:
+ *   没有优先级、没有多级队列 —— 命令量级是"人敲几个字符", 128 字节足够。
+ * ------------------------------------------------------------------------- */
+#define CDC_RX_RING_SIZE 128u
+#define CDC_RX_RING_MASK (CDC_RX_RING_SIZE - 1u)
+
+static volatile uint8_t  cdc_rx_ring[CDC_RX_RING_SIZE];
+static volatile uint16_t cdc_rx_head;
+static volatile uint16_t cdc_rx_tail;
+static volatile uint32_t cdc_rx_total;   /* 累计收到的字节数 */
 
 /* USER CODE END PRIVATE_VARIABLES */
 
@@ -262,6 +276,17 @@ static int8_t CDC_Control_FS(uint8_t cmd, uint8_t* pbuf, uint16_t length)
 static int8_t CDC_Receive_FS(uint8_t* Buf, uint32_t *Len)
 {
   /* USER CODE BEGIN 6 */
+  for (uint32_t i = 0u; i < *Len; i++)
+  {
+    uint16_t next = (uint16_t)((cdc_rx_head + 1u) & CDC_RX_RING_MASK);
+    if (next == cdc_rx_tail)
+    {
+      break;                     /* 满了就丢, 主循环没跟上(正常不会) */
+    }
+    cdc_rx_ring[cdc_rx_head] = Buf[i];
+    cdc_rx_head = next;
+  }
+  cdc_rx_total += *Len;
   USBD_CDC_SetRxBuffer(&hUsbDeviceFS, &Buf[0]);
   USBD_CDC_ReceivePacket(&hUsbDeviceFS);
   return (USBD_OK);
@@ -284,6 +309,11 @@ uint8_t CDC_Transmit_FS(uint8_t* Buf, uint16_t Len)
   uint8_t result = USBD_OK;
   /* USER CODE BEGIN 7 */
   USBD_CDC_HandleTypeDef *hcdc = (USBD_CDC_HandleTypeDef*)hUsbDeviceFS.pClassData;
+  /* ★没枚举完(没插 USB / 主机没打开串口)时 pClassData 是 NULL, 直接解引用会 HardFault
+   *   —— 上电横幅就踩过这个: 板子独立上电(不接电脑)时一开机就死在打印上。 */
+  if (hcdc == NULL || Len == 0u){
+    return USBD_FAIL;
+  }
   if (hcdc->TxState != 0){
     return USBD_BUSY;
   }
@@ -318,15 +348,28 @@ static int8_t CDC_TransmitCplt_FS(uint8_t *Buf, uint32_t *Len, uint8_t epnum)
 
 /* USER CODE BEGIN PRIVATE_FUNCTIONS_IMPLEMENTATION */
 
+/* 发送暂存必须是静态的: CDC_Transmit_FS 只是把指针交给 USB 栈,
+ *   一包 64 字节发不完的尾巴由中断后续搬运 —— 用栈上的局部数组的话,
+ *   函数返回后那块栈随时会被别的调用(中断/下一次 printf)覆盖, 后半行就是垃圾。 */
+static char cdc_tx_buf[512];
+
+static int Cdc_Format(char *dst, size_t n, const char *format, va_list args)
+{
+  int len = vsnprintf(dst, n, format, args);
+
+  if (len < 0) return -1;
+  if (len > (int)(n - 1u)) len = (int)(n - 1u);
+  return len;
+}
+
 /**
   * @brief  CDC_Printf
   *         USB 虚拟串口格式化打印, 用法与 printf 一致
-  * @param  format: 格式化字符串
+  *         ★端点忙时直接丢这一行(不阻塞)。只用于状态/诊断行, 不要用于打点流。
   * @retval 已格式化字符数, 发送失败(总线忙)返回 -1
   */
 int CDC_Printf(const char *format, ...)
 {
-  char buf[512];
   va_list args;
   int len;
 
@@ -336,19 +379,80 @@ int CDC_Printf(const char *format, ...)
   }
 
   va_start(args, format);
-  len = vsnprintf(buf, sizeof(buf), format, args);
+  len = Cdc_Format(cdc_tx_buf, sizeof(cdc_tx_buf), format, args);
   va_end(args);
 
   if (len > 0)
   {
-    uint16_t send_len = (len >= (int)sizeof(buf)) ? (uint16_t)(sizeof(buf) - 1u) : (uint16_t)len;
-    if (CDC_Transmit_FS((uint8_t *)buf, send_len) != USBD_OK)
+    if (CDC_Transmit_FS((uint8_t *)cdc_tx_buf, (uint16_t)len) != USBD_OK)
     {
       return -1;
     }
   }
 
   return len;
+}
+
+/**
+  * @brief  CDC_PrintfBlocking
+  *         会等端点空出来的版本。只给"一次性大批量输出"用(例如导出 2000 点表),
+  *         它会占住主循环; 打点/状态行绝对不要用。
+  * @retval 已发送字符数, 超时返回 -1
+  */
+int CDC_PrintfBlocking(uint32_t timeout_ms, const char *format, ...)
+{
+  va_list args;
+  int len;
+  uint32_t t0 = HAL_GetTick();
+
+  if (format == NULL)
+  {
+    return -1;
+  }
+
+  va_start(args, format);
+  len = Cdc_Format(cdc_tx_buf, sizeof(cdc_tx_buf), format, args);
+  va_end(args);
+  if (len <= 0)
+  {
+    return len;
+  }
+
+  while (CDC_Transmit_FS((uint8_t *)cdc_tx_buf, (uint16_t)len) != USBD_OK)
+  {
+    if ((HAL_GetTick() - t0) > timeout_ms)
+    {
+      return -1;      /* 上位机没开串口 / 拔线了 */
+    }
+  }
+
+  return len;
+}
+
+/**
+  * @brief  CDC_RxTake
+  *         从接收环形缓冲取字节(主循环调用), 返回实际取到的字节数
+  */
+uint32_t CDC_RxTake(uint8_t *dst, uint16_t max)
+{
+  uint32_t n = 0u;
+
+  if (dst == NULL) return 0u;
+
+  while ((n < (uint32_t)max) && (cdc_rx_tail != cdc_rx_head))
+  {
+    dst[n++] = cdc_rx_ring[cdc_rx_tail];
+    cdc_rx_tail = (uint16_t)((cdc_rx_tail + 1u) & CDC_RX_RING_MASK);
+  }
+
+  return n;
+}
+
+/* 累计收到的字节数: 恒 0 = 上位机的命令根本没进 USB(端口/驱动/接收方向问题),
+ *   和命令解析、编码器、标定逻辑都无关 —— 排查"发了命令没反应"先看这个数。 */
+uint32_t CDC_RxTotal(void)
+{
+  return cdc_rx_total;
 }
 
 /* USER CODE END PRIVATE_FUNCTIONS_IMPLEMENTATION */

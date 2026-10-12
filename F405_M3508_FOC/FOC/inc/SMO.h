@@ -40,39 +40,47 @@
 #define SMO_POLE_PAIRS      7u          /* 极对数(= FOC_POLE_PAIRS) */
 #define SMO_RS_DEF          0.194f      /* 相电阻 Ω(实测, 与 FOC_RS 一致) */
 #define SMO_LS_DEF          0.000097f   /* 相电感 H(实测 0.097mH) */
-/* 兜底观测周期(实际由 App_FOC.c 调 SMO_SetTs(抽取周期) 覆盖, 见那里的 SMO_DECIM)。
- *   ★必须与 APP_CTRL_HZ 一致: 20kHz -> 50us; 40kHz -> 25us。
- *     SMO.h 故意不包含 App_Config.h(保持头文件自包含), 所以这里写数字。 */
-#define SMO_TS_DEF          (1.0f / 20000.0f)
+/* 兜底观测周期(实际由 App_FOC.c 调 SMO_SetTs(抽取周期) 覆盖)。
+ *   ★必须与固件控制周期一致: 本工程控制环 = 10kHz -> 100us。
+ *     (存档那版是 20kHz; 回退到 v1.1 基线后是 10kHz, 参数全部按 10kHz 重标) */
+#define SMO_TS_DEF          (1.0f / 10000.0f)
 
 /* 滑模增益 k(V): 必须大于最大反电动势幅值 */
 #define SMO_SLIDE_GAIN      50.0f
 /* 边界层宽度 δ(A): 饱和函数代替符号函数, 消除抖振。
  *   ★δ 必须随观测周期 Ts 等比放大 —— 前向欧拉离散下 G=(1−F)/R 随 Ts 增大,
  *     决定稳定性的无量纲量是 G·k/δ, 线性区闭环极点是 F − G·k/δ, 必须落在单位圆内。
- *     (已经用 50/12/16/20 四组值算过, 不是拍脑袋)
  *
- *     控制频率   Ts      F        G       δ      G·k/δ   闭环极点   判定
- *     40kHz      25us    0.9512   0.2514  8A     1.571   −0.620    ✅
- *     20kHz      50us    0.9048   0.4905  8A     3.066   −2.161    ★发散
- *     20kHz      50us    0.9048   0.4905  12A    2.044   −1.139    ★发散
- *     20kHz      50us    0.9048   0.4905  16A    1.533   −0.628    ✅
- *     20kHz      400us*  0.4493   2.8385  16A    8.871  −8.42      ★发散
- *       (* 400us = 抽取 8, 那种配置下 δ 需要 90A 以上, 已经放弃抽取)
+ *     控制频率   Ts      F        G       δ      G·k/δ   闭环极点    判定
+ *     40kHz      25us    0.9512   0.2514  8A     1.571   −0.620     ✅
+ *     20kHz      50us    0.9048   0.4905  16A    1.533   −0.628     ✅ (存档那版)
+ *     10kHz      100us   0.8187   0.9344  16A    2.920   −2.101     ★发散
+ *     10kHz      100us   0.8187   0.9344  30A    1.557   −0.739     ✅ (现在这个)
  *
- *   稳定下限 δ > G·k/(1+F): 40kHz 是 6.4A, 20kHz(50us) 是 12.9A。
- *   ⇒ 20kHz 保持观测器每拍运行(SMO_DECIM=1), δ 用 16A。 */
-#define SMO_BOUNDARY        16.0f
-/* EMF 一阶低通系数(40kHz): α = 1−exp(−2π·fc/fs), fc≈900Hz → 0.1317
- *   取 0.14 → fc ≈ 960Hz, 基波(最高约 250Hz)相位滞后 ~15°, 两轴抵消不影响角度 */
-#define SMO_EMF_LPF_ALPHA   0.14f
-/* 电角速度一阶低通系数(40kHz): fc ≈ α·fs/2π = 90Hz, 时间常数 ~1.8ms */
-#define SMO_SPD_LPF_ALPHA   0.014f
+ *   稳定下限 δ > G·k/(1+F): 40kHz 是 6.4A, 20kHz(50us) 是 12.9A, **10kHz(100us) 是 25.7A**。
+ *   ★tools/verify_smo.py 会读这里的值自己算一遍, 不满足就直接报错退出 —— 别绕过它。
+ *   (δ 大于 25.7A 才不发散; 取 30A 留 17% 余量。极点为负=误差会隔拍反号衰减,
+ *    仍然稳定, 且 EMF 低通的时间常数比它大, 不影响观测角精度。) */
+#define SMO_BOUNDARY        30.0f
+/* EMF 一阶低通系数: α = 1−exp(−2π·fc/fs), fc≈890Hz。
+ *   ★这个 α 同样跟着 fs 走(否则截止频率会跑偏, 高速时把 |E| 压掉):
+ *     40kHz -> 0.14 ; 10kHz -> 1−exp(−2π·890/10000) = 0.43
+ *   基波(最高约 250Hz)相位滞后 ~15°, 两个轴抵消不影响角度 */
+#define SMO_EMF_LPF_ALPHA   0.43f
+/* 电角速度一阶低通系数: fc ≈ α·fs/2π。40kHz 用 0.014(fc≈89Hz) → 10kHz 用 0.054 */
+#define SMO_SPD_LPF_ALPHA   0.054f
 /* 滞后补偿用的观测器等效带宽 rad/s: 观测器整体等效一个一阶滞后,
- *   θ_true − θ_est ≈ atan(|ωe| / (ω_f + ω_obs)),  ω_f = α·fs = 5600 rad/s
- *   ★400 rad/s 是按 tools/verify_smo.py 在 600~6000rpm 逐点标定出来的
- *     (补偿后偏置极差 < 0.05°); 现场若发现残差仍随转速漂, 用 lag 命令微调 */
+ *   θ_true − θ_est ≈ atan(|ωe| / (ω_f + ω_obs)),  ω_f = α·fs
+ *   ★400 rad/s 是存档版(40kHz, ω_f=5600)标定出来的; 10kHz 下 ω_f = 0.43·10000 = 4300,
+ *     量级相同, 先用同一个值。现场若发现残差随转速漂, 用 tools/verify_smo.py 重标。 */
 #define SMO_LAG_WDEF        400.0f
+
+/* 反电动势有效门限(V): |E| 低于它 = 观测角还不可信(Output.Valid 置 0)。
+ *   0.3V 是实测值。工程里若别处已经定义(旧版在 FOC_Param.h), 以工程里的为准,
+ *   这一份只是让 SMO.h/SMO.c 能独立编译。 */
+#ifndef OBS_EMF_MIN_V
+#define OBS_EMF_MIN_V       0.3f
+#endif
 
 typedef struct{
     float Ialpha;

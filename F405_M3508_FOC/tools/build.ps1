@@ -79,9 +79,31 @@ if ($Files.Count -gt 0) {
         foreach ($h in $hit) { $targets += [pscustomobject]@{ Obj = $h.Key; Src = $h.Value } }
     }
 } else {
+    # ★必须比时间戳, 不能只看"文件在不在":
+    #   只看存在的话, 改完源码再跑这个脚本会拿旧 .obj 去链接, 烧进去的还是老固件 ——
+    #   现场表现就是"改了代码一点变化都没有", 极容易误判成硬件坏(踩过一次)。
+    #   头文件改动影响面太大, 这里用"项目内所有 .h 的最新时间"当水位线, 保守但不会漏。
+    $hdrDirs = @("$root/BSP/inc", "$root/FOC/inc", "$root/Task/inc", "$root/Core/Inc",
+                 "$root/USB_DEVICE/App", "$root/USB_DEVICE/Target")
+    $hdrNewest = [datetime]::MinValue
+    foreach ($d in $hdrDirs) {
+        if (Test-Path $d) {
+            $h = Get-ChildItem $d -Filter *.h -Recurse -ErrorAction SilentlyContinue |
+                 Sort-Object LastWriteTime -Descending | Select-Object -First 1
+            if ($h -and $h.LastWriteTime -gt $hdrNewest) { $hdrNewest = $h.LastWriteTime }
+        }
+    }
+
     foreach ($kv in $map.GetEnumerator()) {
-        $need = $Force -or (-not (Test-Path $kv.Key))
-        if ($need) { $targets += [pscustomobject]@{ Obj = $kv.Key; Src = $kv.Value } }
+        $obj = $kv.Key
+        $src = $kv.Value
+        $need = $Force -or (-not (Test-Path $obj))
+        if (-not $need) {
+            $objTime = (Get-Item $obj).LastWriteTime
+            if ((Test-Path $src) -and ((Get-Item $src).LastWriteTime -gt $objTime)) { $need = $true }
+            elseif ($hdrNewest -gt $objTime) { $need = $true }
+        }
+        if ($need) { $targets += [pscustomobject]@{ Obj = $obj; Src = $src } }
     }
 }
 

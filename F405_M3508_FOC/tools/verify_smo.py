@@ -33,17 +33,43 @@ def read_defines(path, names):
 
 
 def load_params():
-    p = read_defines(ROOT / "FOC/inc/FOC_Param.h",
-                     ["FOC_RS", "FOC_LS", "FOC_POLE_PAIRS", "FOC_FLUX",
-                      "OBS_EMF_MIN_V", "OL_VMAX_DEF"])
-    a = read_defines(ROOT / "BSP/inc/App_Config.h", ["APP_CTRL_HZ"])
-    s = read_defines(ROOT / "FOC/inc/SMO.h",
-                     ["SMO_SLIDE_GAIN", "SMO_BOUNDARY", "SMO_EMF_LPF_ALPHA",
-                      "SMO_SPD_LPF_ALPHA", "SMO_LAG_WDEF"])
+    """参数全部从固件头文件解析, 不抄数字。
+
+    ★回退到 v1.1 基线后工程里没有 FOC_Param.h 了 —— 电机参数只剩 SMO.h 里的
+      SMO_RS_DEF / SMO_LS_DEF / SMO_POLE_PAIRS。这里两个来源都认: 有 FOC_Param.h
+      就用它(存档那版), 没有就退回 SMO.h。磁链只用于生成测试反电动势, 取 1.0mWb。
+    """
+    smoh = ROOT / "FOC/inc/SMO.h"
+    s = read_defines(smoh, ["SMO_SLIDE_GAIN", "SMO_BOUNDARY", "SMO_EMF_LPF_ALPHA",
+                            "SMO_SPD_LPF_ALPHA", "SMO_LAG_WDEF", "OBS_EMF_MIN_V",
+                            "SMO_RS_DEF", "SMO_LS_DEF", "SMO_POLE_PAIRS",
+                            "SMO_TS_DEF"])
+    param = ROOT / "FOC/inc/FOC_Param.h"
+    p = read_defines(param, ["FOC_RS", "FOC_LS", "FOC_POLE_PAIRS", "FOC_FLUX",
+                             "OBS_EMF_MIN_V", "OL_VMAX_DEF"]) if param.exists() else {}
+
+    rs = p.get("FOC_RS", s.get("SMO_RS_DEF"))
+    ls = p.get("FOC_LS", s.get("SMO_LS_DEF"))
+    pp = int(p.get("FOC_POLE_PAIRS", s.get("SMO_POLE_PAIRS", 7)))
+    emf_min = p.get("OBS_EMF_MIN_V", s.get("OBS_EMF_MIN_V", 0.3))
+    if (rs is None) or (ls is None):
+        raise SystemExit("★读不到相电阻/电感(SMO_RS_DEF / SMO_LS_DEF)")
+
+    # 控制频率: 存档那版是 APP_CTRL_HZ, v1.1 基线是 APP_CURRENT_PID_DT_INV
+    a = read_defines(ROOT / "BSP/inc/App_Config.h",
+                     ["APP_CTRL_HZ", "APP_CURRENT_PID_DT_INV"])
+    fs = a.get("APP_CTRL_HZ") or a.get("APP_CURRENT_PID_DT_INV")
+    if not fs:
+        # SMO.h 里有兜底的观测周期(1/SMO_TS_DEF), 用它反推
+        if s.get("SMO_TS_DEF"):
+            fs = 1.0 / s["SMO_TS_DEF"]
+        else:
+            raise SystemExit("★读不到控制频率(APP_CTRL_HZ / APP_CURRENT_PID_DT_INV)")
+
     cfg = {
-        "Rs": p["FOC_RS"], "Ls": p["FOC_LS"], "pp": int(p["FOC_POLE_PAIRS"]),
-        "flux": p["FOC_FLUX"], "fs": a["APP_CTRL_HZ"],
-        "emf_min": p["OBS_EMF_MIN_V"], "vmax": p.get("OL_VMAX_DEF", 6.5),
+        "Rs": rs, "Ls": ls, "pp": pp,
+        "flux": p.get("FOC_FLUX", 1.0e-3), "fs": fs,
+        "emf_min": emf_min, "vmax": p.get("OL_VMAX_DEF", 6.5),
         "k": s["SMO_SLIDE_GAIN"], "delta": s["SMO_BOUNDARY"],
         "alpha": s["SMO_EMF_LPF_ALPHA"], "spd_alpha": s["SMO_SPD_LPF_ALPHA"],
         "lag_w": s["SMO_LAG_WDEF"],

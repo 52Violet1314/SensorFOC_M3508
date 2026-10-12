@@ -20,7 +20,8 @@ ROOT = Path(__file__).resolve().parents[1]
 SRC_GLOBS = ["BSP/src/*.c", "FOC/src/*.c", "Core/Src/*.c", "USB_DEVICE/App/*.c"]
 
 # 匹配一个完整的函数调用(含跨行), 支持嵌套括号
-CALL_RE = re.compile(r"\b(?:CDC_Printf|printf)\s*\(")
+#   ★CDC_PrintfBlocking / CDC_PrintfMsg 也走同一个 vsnprintf, 必须一起查
+CALL_RE = re.compile(r"\b(?:CDC_PrintfBlocking|CDC_PrintfMsg|CDC_Printf|printf)\s*\(")
 # C 的格式转换说明(排除 %%)
 FMT_RE = re.compile(r"%(?!%)[-+ #0-9.*hljztL]*[diouxXeEfFgGaAcspn]")
 

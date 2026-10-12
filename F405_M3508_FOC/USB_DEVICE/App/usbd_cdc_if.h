@@ -110,7 +110,13 @@ uint8_t CDC_Transmit_FS(uint8_t* Buf, uint16_t Len);
 
 /* USER CODE BEGIN EXPORTED_FUNCTIONS */
 
+/* 状态/诊断行: 端点忙就丢这一行(不阻塞) */
 int CDC_Printf(const char *format, ...);
+/* 会等端点空的版本: 只给导出 2000 点表这类一次性大批量输出用 */
+int CDC_PrintfBlocking(uint32_t timeout_ms, const char *format, ...);
+/* 接收: 主循环取上位机发来的命令字节 */
+uint32_t CDC_RxTake(uint8_t *dst, uint16_t max);
+uint32_t CDC_RxTotal(void);   /* 累计收到字节数: 恒 0 = 命令根本没进 USB */
 
 /* USER CODE END EXPORTED_FUNCTIONS */
 

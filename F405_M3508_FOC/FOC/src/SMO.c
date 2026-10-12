@@ -1,5 +1,4 @@
 #include "SMO.h"
-#include "FOC_Param.h"
 #include "LPF.h"
 #include <math.h>
 
@@ -228,7 +227,9 @@ void SMO_Run(SMOTypedef_t *smo)
      *    θ̂ 滞后真值 atan(|ωe|/(ω_f+ω_obs))。用当前估计的 |ωe| 算, 带符号(反转自动反号)。
      *    ★ω_obs 是可标定参数(SMO_LAG_WDEF / 命令 lag <rad/s>), 现场用 off 把残差压到 0。 */
     {
-        float wf = SMO_EMF_LPF_ALPHA * (float)APP_CTRL_HZ;
+        /* ω_f = α·fs。fs 取观测器自己的周期(Ts), 不依赖 App_Config 的控制频率宏 ——
+         *   这样 SMO.c 只要 SMO.h + LPF.h 就能编译, 可以原样贴到任何版本的工程里。 */
+        float wf = SMO_EMF_LPF_ALPHA / smo_Ts;
         /* 直接带符号算: 反转时自动变成负补偿量, 不用额外取反 */
         float lag = atanf(omega_e / (wf + smo_lag_w));
 

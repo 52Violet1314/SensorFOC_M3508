@@ -1,4 +1,5 @@
 #include "main.h"
+#include "Control.h"
 #include "adc.h"
 #include "App_FOC.h"
 #include "can.h"
@@ -22,7 +23,7 @@ int main(void)
     MX_CAN1_Init();
 
     App_FOC_Init();
-
+    // Control_SetSpeedTarget(200);
     while (1)
     {
         App_FOC_MainLoop();
