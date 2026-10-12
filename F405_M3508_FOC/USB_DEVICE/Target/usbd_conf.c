@@ -91,13 +91,7 @@ void HAL_PCD_MspInit(PCD_HandleTypeDef* pcdHandle)
     __HAL_RCC_USB_OTG_FS_CLK_ENABLE();
 
     /* Peripheral interrupt init */
-    /* ★USB 中断优先级必须**高于**(数字更小)FOC 控制中断(ADC_IRQn = 5):
-     *   ADC 中断 20kHz、每拍占用几十 us, USB 和它同级就抢不到 CPU,
-     *   结果是"USB 枚举不了 / 串口一行都收不到"(2026-10 现场现象)。
-     *   这里给 4, 让 USB 事件能抢占控制中断。 */
-  /* USER CODE BEGIN USB_OTG_FS_MspInit 0b */
-    HAL_NVIC_SetPriority(OTG_FS_IRQn, 4, 0);
-  /* USER CODE END USB_OTG_FS_MspInit 0b */
+    HAL_NVIC_SetPriority(OTG_FS_IRQn, 5, 0);
     HAL_NVIC_EnableIRQ(OTG_FS_IRQn);
   /* USER CODE BEGIN USB_OTG_FS_MspInit 1 */
 

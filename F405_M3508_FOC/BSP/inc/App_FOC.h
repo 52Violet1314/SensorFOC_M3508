@@ -15,6 +15,4 @@ extern float Temp;
 extern float Power;
 extern float spd_meas_rpm;
 
-/* 你自己的观测器估计结果可以在这里 extern 出来, 供 CAN 上报或打印对比 */
-
 #endif

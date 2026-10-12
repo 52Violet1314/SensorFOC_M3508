@@ -15,7 +15,6 @@
                 }
             ]
         },
-        
         {
             "name": "Cortex Debug (DAPLink)",
             "type": "cortex-debug",
@@ -45,6 +44,20 @@
                 "enabled": true,
                 "samplesPerSecond": 4
             }
+        },
+        {
+            "name": "1234",
+            "type": "stlinkgdbtarget",
+            "request": "launch",
+            "cwd": "${workspaceFolder}",
+            "preBuild": "${command:st-stm32-ide-debug-launch.build}",
+            "runEntry": "main",
+            "imagesAndSymbols": [
+                {
+                    "imageFileName": "${workspaceFolder}/build/Debug/F405_M3508_FOC_autostart.elf"
+                }
+            ],
+            "verbose": false
         }
     ]
 }

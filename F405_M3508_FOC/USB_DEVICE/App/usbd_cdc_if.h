@@ -111,10 +111,6 @@ uint8_t CDC_Transmit_FS(uint8_t* Buf, uint16_t Len);
 /* USER CODE BEGIN EXPORTED_FUNCTIONS */
 
 int CDC_Printf(const char *format, ...);
-/* 接收环形缓冲(见 usbd_cdc_if.c): 主循环取上位机发来的命令字节 */
-uint32_t CDC_RxTake(uint8_t *dst, uint16_t max);
-uint32_t CDC_RxDropped(void);
-uint32_t CDC_RxTotal(void);   /* 累计收到的字节数: 恒 0 = 上位机根本没发进来 */
 
 /* USER CODE END EXPORTED_FUNCTIONS */
 

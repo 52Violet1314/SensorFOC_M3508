@@ -21,14 +21,7 @@
 #include "adc.h"
 
 /* USER CODE BEGIN 0 */
-/* 注入组采样时间(三只 ADC 共用)。现在控制频率是 20kHz(周期 50us), 时间很宽裕:
- *   28 周期 -> 4*(28+12)/21MHz =  7.6us   (默认)
- *   56 周期 -> 4*(56+12)/21MHz = 18.3us   (更稳; 电流/编码器读数异常时换这个)
- *   84 周期 -> 4*(84+12)/21MHz = 18.3us   ★注意: 三只 ADC 是并行的,
- *   但每个 ADC 要串行转 4 个注入通道, 所以 "(通道数 x (采样+12)) / ADCCLK" 才是单只 ADC 的耗时
- *   (原 144 周期 = 29.7us, 在 40kHz/25us 下装不下; 改回 20kHz 后其实能放下,
- *    但没必要 —— 采样窗口越长越容易被开关噪声干扰, 28 周期够用) */
-#define APP_ADC_INJ_SAMPLETIME   ADC_SAMPLETIME_28CYCLES
+
 /* USER CODE END 0 */
 
 ADC_HandleTypeDef hadc1;
@@ -84,7 +77,7 @@ void MX_ADC1_Init(void)
   sConfigInjected.InjectedChannel = ADC_CHANNEL_0;
   sConfigInjected.InjectedRank = 1;
   sConfigInjected.InjectedNbrOfConversion = 4;
-  sConfigInjected.InjectedSamplingTime = APP_ADC_INJ_SAMPLETIME;
+  sConfigInjected.InjectedSamplingTime = ADC_SAMPLETIME_144CYCLES;
   sConfigInjected.ExternalTrigInjecConvEdge = ADC_EXTERNALTRIGINJECCONVEDGE_RISING;
   sConfigInjected.ExternalTrigInjecConv = ADC_EXTERNALTRIGINJECCONV_T1_CC4;
   sConfigInjected.AutoInjectedConv = DISABLE;
@@ -175,7 +168,7 @@ void MX_ADC2_Init(void)
   sConfigInjected.InjectedChannel = ADC_CHANNEL_1;
   sConfigInjected.InjectedRank = 1;
   sConfigInjected.InjectedNbrOfConversion = 4;
-  sConfigInjected.InjectedSamplingTime = APP_ADC_INJ_SAMPLETIME;
+  sConfigInjected.InjectedSamplingTime = ADC_SAMPLETIME_144CYCLES;
   sConfigInjected.ExternalTrigInjecConvEdge = ADC_EXTERNALTRIGINJECCONVEDGE_RISING;
   sConfigInjected.ExternalTrigInjecConv = ADC_EXTERNALTRIGINJECCONV_T1_CC4;
   sConfigInjected.AutoInjectedConv = DISABLE;
@@ -266,7 +259,7 @@ void MX_ADC3_Init(void)
   sConfigInjected.InjectedChannel = ADC_CHANNEL_2;
   sConfigInjected.InjectedRank = 1;
   sConfigInjected.InjectedNbrOfConversion = 2;
-  sConfigInjected.InjectedSamplingTime = APP_ADC_INJ_SAMPLETIME;
+  sConfigInjected.InjectedSamplingTime = ADC_SAMPLETIME_144CYCLES;
   sConfigInjected.ExternalTrigInjecConvEdge = ADC_EXTERNALTRIGINJECCONVEDGE_RISING;
   sConfigInjected.ExternalTrigInjecConv = ADC_EXTERNALTRIGINJECCONV_T1_CC4;
   sConfigInjected.AutoInjectedConv = DISABLE;

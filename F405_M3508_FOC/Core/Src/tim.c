@@ -45,8 +45,7 @@ void MX_TIM1_Init(void)
   htim1.Instance = TIM1;
   htim1.Init.Prescaler = 0;
   htim1.Init.CounterMode = TIM_COUNTERMODE_CENTERALIGNED1;
-  htim1.Init.Period = 4200;   /* 中心对齐: 168MHz/(2*4200) = 20kHz 控制/采样频率
-                               * ★与 APP_CTRL_HZ / SVPWM.h 的 PWM_PERIOD 必须一致 */
+  htim1.Init.Period = 8400;
   htim1.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
   htim1.Init.RepetitionCounter = 0;
   htim1.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_ENABLE;
